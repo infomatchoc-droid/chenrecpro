@@ -105,6 +105,7 @@ inline void showPluginManager (te::Engine& engine)
     auto deadMansPedal = engine.getTemporaryFileManager().getTempFile ("PluginScanDeadMansPedal");
     auto* c = new PluginListComponent (pm.pluginFormatManager, pm.knownPluginList, deadMansPedal,
                                        &engine.getPropertyStorage().getPropertiesFile(), true);
+    c->setNumberOfThreadsForScanning (4);
     c->setSize (820, 560);
 
     DialogWindow::LaunchOptions o;

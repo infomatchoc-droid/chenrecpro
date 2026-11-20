@@ -13,6 +13,7 @@ using namespace juce;
 #include "LookAndFeel.h"
 #include "EngineHelpers.h"
 #include "PluginWindow.h"
+#include "PluginScanner.h"
 #include "Console.h"
 #include "EditView.h"
 
@@ -505,19 +506,27 @@ class ChenRecProApplication : public JUCEApplication
 public:
     const String getApplicationName() override       { return "ChenRecPro"; }
     const String getApplicationVersion() override    { return JUCE_APPLICATION_VERSION_STRING; }
-    bool moreThanOneInstanceAllowed() override       { return false; }
+    bool moreThanOneInstanceAllowed() override       { return chen::isScanChildProcess(); }
 
     void initialise (const String& commandLine) override
     {
+        if (chen::isScanChildProcess())
+        {
+            setApplicationReturnValue (chen::runScanChild());
+            quit();
+            return;
+        }
+
         LookAndFeel::setDefaultLookAndFeel (&lnf);
         engine = std::make_unique<te::Engine> ("ChenRecPro", std::make_unique<chen::ChenUIBehaviour>(), nullptr);
+        engine->getPluginManager().knownPluginList.setCustomScanner (std::make_unique<chen::OutOfProcessScanner>());
         mainWindow = std::make_unique<chen::MainWindow> (*engine);
         anotherInstanceStarted (commandLine);
     }
 
     void anotherInstanceStarted (const String& commandLine) override
     {
-        if (mainWindow != nullptr && commandLine.isNotEmpty())
+        if (mainWindow != nullptr && commandLine.isNotEmpty() && ! commandLine.contains (chen::scanArg))
             if (auto* mc = mainWindow->getMain())
                 mc->openFiles (StringArray::fromTokens (commandLine, true));
     }
