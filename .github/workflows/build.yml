@@ -1,0 +1,71 @@
+name: Compilation ChenRecPro
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+          - name: macOS
+            os: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sous-modules (Tracktion Engine + JUCE)
+        shell: bash
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive --depth 1
+
+      - name: Configuration (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Configuration (macOS universel)
+        if: runner.os == 'macOS'
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Compilation
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Paquet Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "build/ChenRecPro_artefacts/Release/ChenRecPro.exe" dist/
+          cp LICENSE dist/LICENSE.txt
+          cd dist && 7z a ../ChenRecPro-Windows.zip .
+
+      - name: Paquet macOS
+        if: runner.os == 'macOS'
+        run: |
+          APP="build/ChenRecPro_artefacts/Release/ChenRecPro.app"
+          codesign --force --deep -s - "$APP"
+          ditto -c -k --keepParent "$APP" ChenRecPro-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ChenRecPro-${{ matrix.name }}
+          path: ChenRecPro-*.zip
+
+      - name: Publication (tag vX.Y.Z)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ChenRecPro-*.zip
