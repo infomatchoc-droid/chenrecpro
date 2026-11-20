@@ -30,6 +30,7 @@ public:
     explicit MainComponent (te::Engine& e) : engine (e)
     {
         setWantsKeyboardFocus (true);
+        preferAsioOnFirstLaunch();
         openOrCreate (getDefaultProjectFile());
         startTimerHz (2);
         setSize (1600, 960);
@@ -275,6 +276,26 @@ private:
         if (isNew) save();
         resized();
         updateTitle();
+    }
+
+    /** Sous Windows, bascule une première fois sur ASIO (cartes pro : SSL, RME…). */
+    void preferAsioOnFirstLaunch()
+    {
+       #if JUCE_WINDOWS
+        auto& props = engine.getPropertyStorage().getPropertiesFile();
+        if (props.getBoolValue ("chenAsioChosen", false)) return;
+
+        auto& adm = engine.getDeviceManager().deviceManager;
+        for (auto* type : adm.getAvailableDeviceTypes())
+        {
+            if (type->getTypeName() != "ASIO") continue;
+            type->scanForDevices();
+            if (type->getDeviceNames().isEmpty()) return;
+            adm.setCurrentAudioDeviceType ("ASIO", true);
+            props.setValue ("chenAsioChosen", true);
+            return;
+        }
+       #endif
     }
 
     void addTrack()

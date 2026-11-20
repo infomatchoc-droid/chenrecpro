@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(ChenRecPro VERSION 0.1.0 LANGUAGES C CXX)
+project(ChenRecPro VERSION 0.1.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -56,6 +56,12 @@ target_link_libraries(ChenRecPro PRIVATE
 
 if (MSVC)
     target_compile_options(ChenRecPro PRIVATE /utf-8 /bigobj)
+endif()
+
+# ASIO (SDK Steinberg sous licence GPLv3) : indispensable pour les interfaces pro sous Windows
+if (WIN32)
+    target_include_directories(ChenRecPro PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/external/asiosdk/common")
+    target_compile_definitions(ChenRecPro PRIVATE JUCE_ASIO=1)
 endif()
 
 if (APPLE)
