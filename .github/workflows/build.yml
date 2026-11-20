@@ -64,8 +64,27 @@ jobs:
           name: ChenRecPro-${{ matrix.name }}
           path: ChenRecPro-*.zip
 
-      - name: Publication (tag vX.Y.Z)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+  release:
+    name: Publication de la Release
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version (depuis CMakeLists.txt)
+        id: v
+        run: echo "version=$(grep -oP 'project\(ChenRecPro VERSION \K[0-9.]+' CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
         with:
-          files: ChenRecPro-*.zip
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.v.outputs.version }}
+          name: ChènRecPro ${{ steps.v.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          files: dist/ChenRecPro-*.zip
+          body: |
+            ChènRecPro ${{ steps.v.outputs.version }} — Studio des Chènevières.
+            Windows : dézipper et lancer ChenRecPro.exe.
+            macOS : dézipper, puis clic droit > Ouvrir la première fois (application non notarisée).
