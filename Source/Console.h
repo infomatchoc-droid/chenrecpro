@@ -203,11 +203,41 @@ public:
             }
         }
 
+        // --- envois A–E
+        if (! master)
+        {
+            sectionLabel (g, sendRect (0).getY() - 12, String::fromUTF8 ("ENVOIS A-E"));
+            auto sends = Mixing::getSends (*track);
+            for (int i = 0; i < numSends; ++i)
+            {
+                auto sr = sendRect (i).toFloat();
+                auto* snd = i < sends.size() ? sends[i] : nullptr;
+                g.setColour (snd ? Colour (0xff222a36) : Colour (0xff121315));
+                g.fillRoundedRectangle (sr, 2.0f);
+                g.setColour (Colour (0xff0a0a0b));
+                g.drawRoundedRectangle (sr, 2.0f, 1.0f);
+                if (snd != nullptr)
+                {
+                    // niveau en fond de barre
+                    auto pos = jlimit (0.0f, 1.0f, dbToFaderPos (snd->getGainDb()));
+                    g.setColour (Colour (0xff5c94dd).withAlpha (snd->isMute() ? 0.15f : 0.35f));
+                    g.fillRoundedRectangle (sr.withWidth (sr.getWidth() * pos), 2.0f);
+                    g.setColour (snd->isMute() ? Col::text3 : Colour (0xff9cc0f0));
+                    g.setFont (uiFont (10.5f));
+                    g.drawText (shortName (Mixing::busName (getEdit(), snd->getBusNumber())), sr.reduced (5, 0).withTrimmedRight (34), Justification::centredLeft, true);
+                    g.setColour (Col::text2);
+                    g.drawText (dbString (snd->getGainDb()), sr.reduced (4, 0), Justification::centredRight);
+                }
+            }
+        }
+
         // --- E/S
         auto ioY = ioTop();
         sectionLabel (g, ioY - 12, "E/S");
         drawField (g, { 4.0f, (float) ioY, getWidth() - 8.0f, 17.0f }, inputName());
-        drawField (g, { 4.0f, (float) ioY + 19, getWidth() - 8.0f, 17.0f }, master ? String ("Sortie 1-2") : String::fromUTF8 ("Stéréo Out"));
+        String out = master ? String ("Sortie 1-2") : String::fromUTF8 ("Stéréo Out");
+        if (auto* at = dynamic_cast<te::AudioTrack*> (track)) out = Mixing::outputName (*at);
+        drawField (g, { 4.0f, (float) ioY + 19, getWidth() - 8.0f, 17.0f }, String::fromUTF8 ("▸ ") + out);
 
         // --- boutons
         if (! master)
@@ -316,10 +346,28 @@ public:
             return;
         }
 
+        if (! master)
+            if (auto si = sendAt (pos); si >= 0)
+            {
+                sendClick (si, e);
+                return;
+            }
+
+        if (! master && Rectangle<int> (4, ioTop() + 19, getWidth() - 8, 17).contains (pos))
+        {
+            if (auto* at = dynamic_cast<te::AudioTrack*> (track))
+            {
+                slotMenuAnchor.setBounds (4, ioTop() + 19, getWidth() - 8, 17);
+                Mixing::showOutputMenu (*at, &slotMenuAnchor);
+            }
+            return;
+        }
+
         if (faderArea().expanded (4).contains (pos))
         {
             if (e.mods.isAltDown()) { if (auto v = getVolume()) v->setVolumeDb (0.0f); repaint(); return; }
             dragging = true;
+            if (auto v = getVolume()) v->volParam->parameterChangeGestureBegin();   // pour l'écriture d'automation
             setFaderFromY (pos.y);
             return;
         }
@@ -341,8 +389,24 @@ public:
             maxPeak = 0.0f;
     }
 
-    void mouseDrag (const MouseEvent& e) override { if (dragging) setFaderFromY (e.getPosition().y); }
-    void mouseUp (const MouseEvent&) override     { dragging = false; }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (dragging) setFaderFromY (e.getPosition().y);
+        if (draggingSend != nullptr)
+        {
+            auto db = jlimit (-60.0f, 6.0f, sendStartDb - (e.getDistanceFromDragStartY() - e.getDistanceFromDragStartX()) * 0.25f);
+            draggingSend->setGainDb (db);
+            repaint();
+        }
+    }
+
+    void mouseUp (const MouseEvent&) override
+    {
+        if (dragging)
+            if (auto v = getVolume()) v->volParam->parameterChangeGestureEnd();
+        dragging = false;
+        draggingSend = nullptr;
+    }
 
     void mouseDoubleClick (const MouseEvent& e) override
     {
@@ -388,6 +452,68 @@ private:
         startTimerHz (30);
     }
 
+    te::AuxSendPlugin* draggingSend = nullptr;
+    float sendStartDb = 0.0f;
+
+    void sendClick (int index, const MouseEvent& e)
+    {
+        auto sends = Mixing::getSends (*track);
+        auto* snd = index < sends.size() ? sends[index] : nullptr;
+        auto& edit = getEdit();
+
+        if (snd != nullptr && e.mods.isAltDown()) { snd->setGainDb (0.0f); repaint(); return; }
+
+        if (snd != nullptr && ! e.mods.isPopupMenu())
+        {
+            draggingSend = snd;           // glisser vers le haut / la droite : plus fort
+            sendStartDb = snd->getGainDb();
+            return;
+        }
+
+        PopupMenu m;
+        te::Plugin::Ptr keepSend (snd);
+        te::Track::Ptr keepTrack (track);
+        if (snd != nullptr)
+        {
+            m.addItem (1, snd->isMute() ? "Activer l'envoi" : "Couper l'envoi");
+            m.addItem (2, "Supprimer l'envoi");
+            m.addItem (3, String::fromUTF8 ("Niveau à 0 dB"));
+        }
+        else
+        {
+            m.addSectionHeader (String::fromUTF8 ("ENVOI VERS…"));
+            auto fx = Mixing::getFxReturns (edit);
+            for (auto& [bus, t] : fx)
+                m.addItem (100 + bus, t->getName());
+            if (! fx.empty()) m.addSeparator();
+            m.addItem (10, String::fromUTF8 ("Nouvelle FX : Réverb"));
+            m.addItem (11, String::fromUTF8 ("Nouvelle FX : Délai"));
+            m.addItem (12, String::fromUTF8 ("Nouvelle FX vide"));
+        }
+
+        slotMenuAnchor.setBounds (sendRect (index));
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (&slotMenuAnchor),
+                         [keepSend, keepTrack, &edit, sp = SafePointer<ChannelStrip> (this)] (int r)
+        {
+            if (r == 0) return;
+            if (auto* s2 = dynamic_cast<te::AuxSendPlugin*> (keepSend.get()))
+            {
+                if (r == 1) s2->setMute (! s2->isMute());
+                if (r == 2) s2->deleteFromParent();
+                if (r == 3) s2->setGainDb (0.0f);
+            }
+            else if (keepTrack != nullptr)
+            {
+                if (r >= 100) Mixing::addSend (*keepTrack, r - 100);
+                if (r >= 10 && r <= 12)
+                    if (auto* fxTrack = Mixing::createFxTrack (edit, r == 10 ? Mixing::FxKind::reverb : r == 11 ? Mixing::FxKind::delay : Mixing::FxKind::empty))
+                        if (auto* ret = Mixing::getAuxReturn (*fxTrack))
+                            Mixing::addSend (*keepTrack, ret->busNumber.get());
+            }
+            if (sp != nullptr) sp->repaint();
+        });
+    }
+
     Array<te::Plugin*> getPlugins() const
     {
         if (masterEdit != nullptr)
@@ -430,6 +556,11 @@ private:
         {
             index = list.indexOf (plugins.getLast()) + 1;
         }
+        else if (track != nullptr)
+        {
+            if (auto* ret = Mixing::getAuxReturn (*track))   // piste FX : après le retour
+                index = list.indexOf (ret) + 1;
+        }
 
         list.insertPlugin (p, index, nullptr);
         p->showWindowExplicitly();
@@ -439,6 +570,8 @@ private:
     String inputName() const
     {
         if (master) return "Mix";
+        if (auto* r = Mixing::getAuxReturn (*track)) return "Bus " + String (r->busNumber.get() + 1);
+        if (EngineHelpers::isInstrumentTrack (*track)) return String::fromUTF8 ("MIDI · ") + EngineHelpers::instrumentName (*track);
         if (auto* at = dynamic_cast<te::AudioTrack*> (track))
             for (auto* in : at->edit.getAllInputDevices())
                 if (te::isOnTargetTrack (*in, *at, 0))
@@ -483,7 +616,14 @@ private:
         return -1;
     }
 
-    int ioTop() const              { return slotRect (9).getBottom() + 18; }
+    static constexpr int numSends = 5;
+    Rectangle<int> sendRect (int i) const { return { 4, slotRect (9).getBottom() + 16 + i * slotH, getWidth() - 8, slotH - 2 }; }
+    int sendAt (Point<int> p) const
+    {
+        for (int i = 0; i < numSends; ++i) if (sendRect (i).contains (p)) return i;
+        return -1;
+    }
+    int ioTop() const              { return (master ? slotRect (9).getBottom() : sendRect (numSends - 1).getBottom()) + 18; }
     Rectangle<int> buttonsRect() const { return { 6, ioTop() + 80, getWidth() - 12, 18 }; }
     Rectangle<int> nameRect() const    { return { 4, getHeight() - 28, getWidth() - 8, 24 }; }
     Rectangle<int> faderArea() const

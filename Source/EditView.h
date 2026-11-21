@@ -143,6 +143,12 @@ public:
                 case 6: tr.looping = ! tr.looping.get(); break;
                 case 7: edit.clickTrackEnabled = ! edit.clickTrackEnabled.get(); break;
                 case 8: { auto res = tr.applyRetrospectiveRecord (false); ignoreUnused (res); break; }
+                case 9:
+                {
+                    auto& arm = edit.getAutomationRecordManager();
+                    arm.setWritingAutomation (! arm.isWritingAutomation());
+                    break;
+                }
                 default: break;
             }
             repaint();
@@ -152,7 +158,7 @@ public:
 
 private:
     te::Edit& edit;
-    static constexpr int numTransportButtons = 9;
+    static constexpr int numTransportButtons = 10;
 
     void timerCallback() override { repaint(); }
 
@@ -174,7 +180,8 @@ private:
     void drawTransportButton (Graphics& g, int i, Rectangle<int> r, te::TransportControl& tr)
     {
         bool on = (i == 4 && tr.isPlaying()) || (i == 5 && tr.isRecording())
-               || (i == 6 && tr.looping.get()) || (i == 7 && edit.clickTrackEnabled.get());
+               || (i == 6 && tr.looping.get()) || (i == 7 && edit.clickTrackEnabled.get())
+               || (i == 9 && edit.getAutomationRecordManager().isWritingAutomation());
         if (on)
         {
             g.setColour (i == 4 ? Colour (0xff1d3324) : i == 5 ? Colour (0xff3a1d1f) : Colour (0xff33302a));
@@ -201,6 +208,14 @@ private:
                 g.strokePath (loop, PathStrokeType (1.6f));
                 p.addTriangle (cx + 3, cy - 6, cx + 3, cy, cx + 7, cy - 3);
                 p.addTriangle (cx - 3, cy, cx - 3, cy + 6, cx - 7, cy + 3);
+                break;
+            }
+            case 9:
+            {
+                // écriture d'automation
+                g.setColour (on ? Col::rec : Colour (0xffaeb2ba));
+                g.setFont (uiFont (13.0f, true));
+                g.drawText ("W", r, Justification::centred);
                 break;
             }
             case 8:
@@ -375,6 +390,15 @@ public:
         }
 
         selectedTrack = t;
+
+        if (automationView)
+        {
+            automationMouseDown (*t, e);
+            notifySelection();
+            repaint();
+            return;
+        }
+
         selectedClip = clipAt (*t, xToTime (p.x));
         if (selectedClip != nullptr)
         {
@@ -399,6 +423,12 @@ public:
         if (draggingPlayhead)
         {
             edit.getTransport().setPosition (te::TimePosition::fromSeconds (snap (jmax (0.0, xToTime (e.x)))));
+            return;
+        }
+
+        if (autoDragParam != nullptr)
+        {
+            automationDrag (e);
             return;
         }
 
@@ -462,7 +492,7 @@ public:
         repaint();
     }
 
-    void mouseUp (const MouseEvent&) override { draggingPlayhead = false; dragMode = DragMode::none; }
+    void mouseUp (const MouseEvent&) override { draggingPlayhead = false; dragMode = DragMode::none; autoDragParam = nullptr; }
 
     void mouseDoubleClick (const MouseEvent& e) override
     {
@@ -497,6 +527,9 @@ public:
     }
 
     std::function<void (te::MidiClip*)> onOpenMidiEditor;
+
+    bool automationView = false;
+    void toggleAutomationView() { automationView = ! automationView; repaint(); }
 
     void selectTrack (te::AudioTrack* t)
     {
@@ -1104,6 +1137,9 @@ private:
             g.drawRoundedRectangle (Rectangle<float> (x1, (float) r.getY() + 2, x2 - x1, (float) r.getHeight() - 5).reduced (0.5f), 3.0f, sel ? 1.5f : 1.0f);
         }
 
+        if (automationView)
+            drawAutomation (g, t, r);
+
         // prise en cours d'enregistrement
         if (edit.getTransport().isRecording() && EngineHelpers::isTrackArmed (t))
         {
@@ -1114,6 +1150,102 @@ private:
             g.setColour (Col::rec);
             g.drawRoundedRectangle (x1, (float) r.getY() + 2, jmax (2.0f, x2 - x1), (float) r.getHeight() - 5, 3, 1);
         }
+    }
+
+    //==========================================================================
+    // Automation du volume (courbe sur la piste)
+    te::AutomatableParameter::Ptr autoDragParam;
+    int autoDragIndex = -1;
+    te::AudioTrack* autoDragTrack = nullptr;
+
+    Rectangle<float> automationArea (te::Track& t) const
+    {
+        return { (float) headerW, trackTop (t) + 6.0f, (float) getWidth() - headerW, trackHeight (t) - 12.0f };
+    }
+
+    float valueToY (Rectangle<float> a, float v) const  { return a.getBottom() - jlimit (0.0f, 1.0f, v) * a.getHeight(); }
+    float yToValue (Rectangle<float> a, float y) const  { return jlimit (0.0f, 1.0f, (a.getBottom() - y) / a.getHeight()); }
+
+    void drawAutomation (Graphics& g, te::AudioTrack& t, Rectangle<int> lane)
+    {
+        auto* v = t.getVolumePlugin();
+        if (v == nullptr) return;
+        auto& curve = v->volParam->getCurve();
+        auto a = automationArea (t);
+
+        g.setColour (Colours::black.withAlpha (0.35f));
+        g.fillRect (lane);
+
+        Path p;
+        for (int x = lane.getX(); x <= lane.getRight(); x += 2)
+        {
+            auto time = te::TimePosition::fromSeconds (jmax (0.0, xToTime (x)));
+            auto val = curve.getNumPoints() > 0 ? curve.getValueAt (time, v->volParam->getCurrentValue()) : v->volParam->getCurrentValue();
+            auto y = valueToY (a, val);
+            if (x == lane.getX()) p.startNewSubPath ((float) x, y); else p.lineTo ((float) x, y);
+        }
+        g.setColour (Col::accent);
+        g.strokePath (p, PathStrokeType (1.6f));
+
+        for (int i = 0; i < curve.getNumPoints(); ++i)
+        {
+            auto x = timeToX (curve.getPointTime (i).inSeconds());
+            auto y = valueToY (a, curve.getPointValue (i));
+            g.setColour (Col::bg);
+            g.fillRect (x - 3, y - 3, 6.0f, 6.0f);
+            g.setColour (Col::accent);
+            g.drawRect (x - 3, y - 3, 6.0f, 6.0f, 1.2f);
+        }
+
+        g.setColour (Col::accent.withAlpha (0.8f));
+        g.setFont (uiFont (10.5f, true));
+        g.drawText ("VOLUME  " + dbString (te::volumeFaderPositionToDB (v->volParam->getCurrentValue())) + " dB",
+                    lane.getX() + 6, lane.getY() + 4, 160, 14, Justification::centredLeft);
+    }
+
+    void automationMouseDown (te::AudioTrack& t, const MouseEvent& e)
+    {
+        auto* v = t.getVolumePlugin();
+        if (v == nullptr) return;
+        auto& curve = v->volParam->getCurve();
+        auto a = automationArea (t);
+        auto* um = &edit.getUndoManager();
+
+        // point existant ?
+        for (int i = 0; i < curve.getNumPoints(); ++i)
+        {
+            auto x = timeToX (curve.getPointTime (i).inSeconds());
+            auto y = valueToY (a, curve.getPointValue (i));
+            if (std::abs (x - e.position.x) < 6 && std::abs (y - e.position.y) < 6)
+            {
+                if (e.mods.isAltDown() || e.mods.isPopupMenu()) { curve.removePoint (i, um); return; }
+                autoDragParam = v->volParam;
+                autoDragIndex = i;
+                autoDragTrack = &t;
+                return;
+            }
+        }
+
+        if (e.mods.isAltDown() || e.mods.isPopupMenu()) return;
+
+        // nouveau point
+        auto time = te::TimePosition::fromSeconds (jmax (0.0, xToTime (e.x)));
+        if (transportBar.mode == TransportBar::Mode::grid) time = te::TimePosition::fromSeconds (snap (time.inSeconds()));
+        if (curve.getNumPoints() == 0)   // ancre au début, pour garder le niveau actuel avant le premier point
+            curve.addPoint (te::TimePosition(), v->volParam->getCurrentValue(), 0.0f, um);
+        autoDragIndex = curve.addPoint (time, yToValue (a, e.position.y), 0.0f, um);
+        autoDragParam = v->volParam;
+        autoDragTrack = &t;
+    }
+
+    void automationDrag (const MouseEvent& e)
+    {
+        if (autoDragTrack == nullptr || autoDragIndex < 0) return;
+        auto a = automationArea (*autoDragTrack);
+        auto time = te::TimePosition::fromSeconds (jmax (0.0, xToTime (e.x)));
+        if (transportBar.mode == TransportBar::Mode::grid) time = te::TimePosition::fromSeconds (snap (time.inSeconds()));
+        autoDragIndex = autoDragParam->getCurve().movePoint (*autoDragParam, autoDragIndex, time, yToValue (a, e.position.y), false, &edit.getUndoManager());
+        repaint();
     }
 
     void drawMidiNotes (Graphics& g, te::MidiClip& c, Rectangle<float> area, Colour col)

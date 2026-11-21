@@ -14,6 +14,7 @@ using namespace juce;
 #include "EngineHelpers.h"
 #include "PluginWindow.h"
 #include "PluginScanner.h"
+#include "Mixing.h"
 #include "Console.h"
 #include "Playlists.h"
 #include "EditView.h"
@@ -74,7 +75,7 @@ public:
         g.drawText (s, sb.reduced (10, 0), Justification::centredLeft);
 
         g.setColour (Col::accent);
-        g.drawText (String::fromUTF8 ("F3 · Console     Espace · Lecture     R · Enregistrer     B · Séparer     Ctrl+D · Dupliquer     Maj+R · MIDI rétro     Ctrl+Maj+T · Instrument"),
+        g.drawText (String::fromUTF8 ("F3 · Console     Espace · Lecture     R · Enregistrer     B · Séparer     Ctrl+D · Dupliquer     Maj+R · MIDI rétro     A · Automation     W · Écriture"),
                     sb.reduced (10, 0), Justification::centred);
 
         g.setColour (saved ? Col::meterMid : Col::text2);
@@ -149,6 +150,13 @@ public:
         if (! cmd && (code == 'C' || code == 'c'))     { edit->clickTrackEnabled = ! edit->clickTrackEnabled.get(); return true; }
         if (! cmd && (code == 'F' || code == 'f'))     { arrange->zoomToFit(); return true; }
         if (! cmd && (code == 'I' || code == 'i'))     { showInspector = ! showInspector; resized(); return true; }
+        if (! cmd && (code == 'A' || code == 'a'))     { arrange->toggleAutomationView(); return true; }
+        if (! cmd && (code == 'W' || code == 'w'))
+        {
+            auto& arm = edit->getAutomationRecordManager();
+            arm.setWritingAutomation (! arm.isWritingAutomation());
+            return true;
+        }
         return false;
     }
 
@@ -179,6 +187,8 @@ public:
             case 2:
                 m.addItem (20, "Nouvelle piste audio\tCtrl+T");
                 m.addItem (24, String::fromUTF8 ("Nouvelle piste instrument…\tCtrl+Maj+T"));
+                m.addItem (25, String::fromUTF8 ("Nouvelle piste FX : Réverb"));
+                m.addItem (26, String::fromUTF8 ("Nouvelle piste FX : Délai"));
                 m.addItem (21, String::fromUTF8 ("Supprimer la piste sélectionnée"));
                 m.addSeparator();
                 m.addItem (22, String::fromUTF8 ("Tempo du projet…"));
@@ -203,6 +213,7 @@ public:
                 m.addItem (60, String::fromUTF8 ("Console\tF3"), true, consoleWindow != nullptr);
                 m.addItem (61, String::fromUTF8 ("Zoom pour tout voir\tF"));
                 m.addItem (62, "Inspecteur\tI", true, showInspector);
+                m.addItem (63, "Automation du volume\tA", true, arrange && arrange->automationView);
                 break;
             case 7:
                 m.addItem (70, String::fromUTF8 ("À propos de ChènRecPro"));
@@ -242,6 +253,9 @@ public:
             case 60: toggleConsole(); break;
             case 61: arrange->zoomToFit(); break;
             case 62: showInspector = ! showInspector; resized(); break;
+            case 63: arrange->toggleAutomationView(); break;
+            case 25: Mixing::createFxTrack (*edit, Mixing::FxKind::reverb); break;
+            case 26: Mixing::createFxTrack (*edit, Mixing::FxKind::delay); break;
             case 70: showAbout(); break;
             default: break;
         }
@@ -289,6 +303,8 @@ private:
         bool isNew = ! f.existsAsFile();
         edit = isNew ? te::createEmptyEdit (engine, f) : te::loadEditFromFile (engine, f);
         edit->playInStopEnabled = true;
+        edit->getAutomationRecordManager().setWritingAutomation (false);   // lecture par défaut (W pour écrire)
+        edit->getAutomationRecordManager().setReadingAutomation (true);
         edit->getTransport().ensureContextAllocated();
 
         if (isNew)

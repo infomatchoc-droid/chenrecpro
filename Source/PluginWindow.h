@@ -17,6 +17,8 @@ inline Array<te::Plugin*> getInsertPlugins (te::Track& t)
     {
         if (dynamic_cast<te::VolumeAndPanPlugin*> (p) != nullptr) continue;
         if (dynamic_cast<te::LevelMeterPlugin*> (p) != nullptr) continue;
+        if (dynamic_cast<te::AuxSendPlugin*> (p) != nullptr) continue;
+        if (dynamic_cast<te::AuxReturnPlugin*> (p) != nullptr) continue;
         res.add (p);
     }
     return res;

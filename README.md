@@ -5,6 +5,18 @@ Il reprend le meilleur de Cubase, Pro Tools, Logic et Ableton Live, et il est co
 
 Usage interne au studio pour l'instant.
 
+## v0.4 — « Mixage »
+
+- **Envois A–E** sur chaque tranche de la console : un clic sur un envoi vide ouvre le menu (bus existants, nouvelle FX réverb, délai ou vide).
+  - glisser vers le haut ou la droite : plus fort ; Alt+clic : 0 dB ;
+  - clic droit : couper ou supprimer l'envoi ;
+  - les envois sont post-fader, comme dans Pro Tools.
+- **Pistes FX** : retour d'effet prêt à l'emploi (réverb ou délai 100 % mouillé), aussi dans le menu Projet.
+- **Routage** : la sortie d'une piste (E/S ▸) peut aller vers Stéréo Out ou vers une autre piste qui sert de bus. Une nouvelle piste Bus se crée en un clic, et les boucles sont impossibles.
+- **Automation du volume** :
+  - A affiche les courbes : un clic ajoute un point, on le glisse pour le déplacer, Alt+clic le supprime ;
+  - W (ou le bouton W du transport) active l'écriture en direct avec les faders, en mode lecture par défaut.
+
 ## v0.3 — « Composition »
 
 - **Pistes instrument** (Ctrl+Maj+T) : choix d'un instrument VST3, ou des instruments intégrés 4OSC et Sampler.
@@ -72,6 +84,8 @@ Usage interne au studio pour l'instant.
 | Ctrl+Maj+T | Nouvelle piste instrument |
 | Maj+R | MIDI rétrospectif |
 | Q (éditeur) | Quantifier à la double-croche |
+| A | Afficher l'automation du volume |
+| W | Écriture d'automation |
 | Ctrl+molette | Zoom horizontal |
 
 ## Compiler
