@@ -299,6 +299,16 @@ public:
         g.setColour (Colour (0xff141414));
         g.setFont (uiFont (12.5f, true));
         g.drawText (master ? String::fromUTF8 ("STÉRÉO OUT") : track->getName(), np.reduced (3, 0), Justification::centred, true);
+        if (! master)
+            if (auto gr = Groups::groupOf (*track); gr > 0)
+            {
+                auto b = Rectangle<float> (np.getX() + 2, np.getY() - 18, 16, 14);
+                g.setColour (Groups::colour (gr));
+                g.fillRoundedRectangle (b, 3.0f);
+                g.setColour (Colour (0xff141414));
+                g.setFont (uiFont (10.5f, true));
+                g.drawText (Groups::letter (gr), b, Justification::centred);
+            }
     }
 
     void resized() override
@@ -367,6 +377,7 @@ public:
         {
             if (e.mods.isAltDown()) { if (auto v = getVolume()) v->setVolumeDb (0.0f); repaint(); return; }
             dragging = true;
+            faderAlone = e.mods.isCommandDown() || e.mods.isCtrlDown();   // Ctrl : hors groupe
             if (auto v = getVolume()) v->volParam->parameterChangeGestureBegin();   // pour l'écriture d'automation
             setFaderFromY (pos.y);
             return;
@@ -379,8 +390,8 @@ public:
             auto* at = dynamic_cast<te::AudioTrack*> (track);
             if (idx == 0 && at) EngineHelpers::armTrack (*at, ! EngineHelpers::isTrackArmed (*at));
             if (idx == 1 && at) EngineHelpers::enableInputMonitoring (*at, ! EngineHelpers::isInputMonitoringEnabled (*at));
-            if (idx == 2) track->setSolo (! track->isSolo (false));
-            if (idx == 3) track->setMute (! track->isMuted (false));
+            if (idx == 2) Groups::setSolo (*track, ! track->isSolo (false));
+            if (idx == 3) Groups::setMute (*track, ! track->isMuted (false));
             repaint();
             return;
         }
@@ -453,6 +464,7 @@ private:
     }
 
     te::AuxSendPlugin* draggingSend = nullptr;
+    bool faderAlone = false;
     float sendStartDb = 0.0f;
 
     void sendClick (int index, const MouseEvent& e)
@@ -636,7 +648,10 @@ private:
     {
         auto fr = faderArea();
         auto p = jlimit (0.0f, 1.0f, (float) (fr.getBottom() - y) / (float) fr.getHeight());
-        if (auto v = getVolume()) v->setVolumeDb (faderPosToDb (p));
+        if (auto* at = dynamic_cast<te::AudioTrack*> (track); at != nullptr && masterEdit == nullptr)
+            Groups::setVolume (*at, faderPosToDb (p), faderAlone);
+        else if (auto v = getVolume())
+            v->setVolumeDb (faderPosToDb (p));
         repaint();
     }
 

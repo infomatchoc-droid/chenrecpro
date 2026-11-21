@@ -111,6 +111,7 @@ public:
 
         // charge CPU
         auto cr = cpuRect();
+        if (cr.getWidth() < 70) return;   // pas la place : on masque le CPU
         auto cpu = (float) edit.engine.getDeviceManager().getCpuUsage();
         g.setColour (Col::text2);
         g.setFont (uiFont (10.5f));
@@ -175,7 +176,11 @@ private:
     Rectangle<int> transportRect() const      { return { jmax (modesRect().getRight() + 12, getWidth() / 2 - 420), (getHeight() - 34) / 2, numTransportButtons * 34 + 6, 34 }; }
     Rectangle<int> transportButtonRect (int i) const { auto r = transportRect(); return { r.getX() + 3 + i * 34, r.getY() + 3, 32, 28 }; }
     Rectangle<int> lcdRect() const            { return { transportRect().getRight() + 12, (getHeight() - 46) / 2, 520, 46 }; }
-    Rectangle<int> cpuRect() const            { return { getWidth() - 170, (getHeight() - 20) / 2, 156, 20 }; }
+    Rectangle<int> cpuRect() const
+    {
+        auto x = jmax (lcdRect().getRight() + 16, getWidth() - 170);
+        return { x, (getHeight() - 20) / 2, jmax (0, jmin (156, getWidth() - x - 10)), 20 };
+    }
 
     void drawTransportButton (Graphics& g, int i, Rectangle<int> r, te::TransportControl& tr)
     {
@@ -391,6 +396,16 @@ public:
 
         if (p.x < headerW)
         {
+            if (e.mods.isCommandDown() || e.mods.isCtrlDown() || e.mods.isShiftDown())
+            {
+                if (selectedTrack != nullptr) multiSel.addIfNotAlreadyThere (selectedTrack);
+                if (multiSel.contains (t)) multiSel.removeFirstMatchingValue (t); else multiSel.add (t);
+                selectedTrack = t;
+                notifySelection();
+                repaint();
+                return;
+            }
+            multiSel.clear();
             headerClick (*t, p);
             notifySelection();
             return;
@@ -436,6 +451,14 @@ public:
         if (autoDragParam != nullptr)
         {
             automationDrag (e);
+            return;
+        }
+
+        if (headerVolTrack != nullptr)
+        {
+            auto pos = dbToFaderPos (headerVolStartDb) + (e.x - headerVolStartX) / (headerW - 100.0f) * (e.mods.isShiftDown() ? 0.2f : 1.0f);
+            Groups::setVolume (*headerVolTrack, faderPosToDb (jlimit (0.0f, 1.0f, pos)), e.mods.isCommandDown() || e.mods.isCtrlDown());
+            repaint();
             return;
         }
 
@@ -517,7 +540,7 @@ public:
             compTrack = nullptr;
             repaint();
         }
-        draggingPlayhead = false; dragMode = DragMode::none; autoDragParam = nullptr;
+        draggingPlayhead = false; dragMode = DragMode::none; autoDragParam = nullptr; headerVolTrack = nullptr;
     }
 
     void mouseDoubleClick (const MouseEvent& e) override
@@ -527,6 +550,7 @@ public:
         if (e.x < headerW)
         {
             if (e.y < trackTop (*t) + 26) renameTrack (*t);
+            else if (e.y >= trackTop (*t) + 44 && e.y <= trackTop (*t) + 62) { Groups::setVolume (*t, 0.0f); repaint(); }   // double-clic : 0 dB
             return;
         }
 
@@ -764,6 +788,21 @@ public:
 
     te::AudioTrack* getSelectedTrack() const { return selectedTrack; }
 
+    /** Pistes sélectionnées (Ctrl/Maj+clic dans les en-têtes). */
+    Array<te::AudioTrack*> getSelectedTracks() const
+    {
+        auto res = multiSel;
+        if (selectedTrack != nullptr) res.addIfNotAlreadyThere (selectedTrack);
+        auto all = te::getAudioTracks (edit);
+        res.removeIf ([&all] (te::AudioTrack* t) { return ! all.contains (t); });
+        return res;
+    }
+
+    Array<te::AudioTrack*> multiSel;
+    te::AudioTrack* headerVolTrack = nullptr;
+    float headerVolStartDb = 0.0f;
+    int headerVolStartX = 0;
+
     void zoomToFit()
     {
         auto len = jmax (30.0, edit.getLength().inSeconds() + 4.0);
@@ -968,7 +1007,7 @@ private:
 
     void paintHeader (Graphics& g, te::AudioTrack& t, int number, Rectangle<int> r)
     {
-        bool sel = &t == selectedTrack;
+        bool sel = &t == selectedTrack || multiSel.contains (&t);
         g.setGradientFill (ColourGradient (sel ? Colour (0xff2d3039) : Col::panel2, (float) r.getX(), 0,
                                            sel ? Colour (0xff23252b) : Col::panel1, (float) r.getRight(), 0, false));
         g.fillRect (r);
@@ -979,9 +1018,21 @@ private:
         g.setColour (t.getColour());
         g.fillRect (r.getX(), r.getY(), 5, r.getHeight() - 1);
 
-        g.setColour (Col::text3);
-        g.setFont (uiFont (11.0f));
-        g.drawText (String (number), r.getX() + 10, r.getY() + 6, 18, 18, Justification::centredLeft);
+        if (auto gr = Groups::groupOf (t); gr > 0)
+        {
+            auto b = Rectangle<float> ((float) r.getX() + 8, r.getY() + 7.0f, 16, 15);
+            g.setColour (Groups::colour (gr));
+            g.fillRoundedRectangle (b, 3.0f);
+            g.setColour (Colour (0xff141414));
+            g.setFont (uiFont (11.0f, true));
+            g.drawText (Groups::letter (gr), b, Justification::centred);
+        }
+        else
+        {
+            g.setColour (Col::text3);
+            g.setFont (uiFont (11.0f));
+            g.drawText (String (number), r.getX() + 10, r.getY() + 6, 18, 18, Justification::centredLeft);
+        }
         g.setColour (Colour (0xffe3e5e9));
         g.setFont (uiFont (13.5f, true));
         g.drawText (t.getName(), r.getX() + 30, r.getY() + 6, r.getWidth() - 140, 18, Justification::centredLeft, true);
@@ -1050,16 +1101,25 @@ private:
             auto i = (p.x - bx) / 22;
             if (p.x >= bx && i < 4)
             {
-                if (i == 0) t.setMute (! t.isMuted (false));
-                if (i == 1) t.setSolo (! t.isSolo (false));
+                if (i == 0) Groups::setMute (t, ! t.isMuted (false));
+                if (i == 1) Groups::setSolo (t, ! t.isSolo (false));
                 if (i == 2) EngineHelpers::armTrack (t, ! EngineHelpers::isTrackArmed (t));
                 if (i == 3) EngineHelpers::enableInputMonitoring (t, ! EngineHelpers::isInputMonitoringEnabled (t));
             }
         }
-        else if (p.y >= top + 44 && p.y <= top + 62 && p.x >= 30 && p.x <= headerW - 70)
+        else if (p.y >= top + 44 && p.y <= top + 62 && p.x >= 22 && p.x <= headerW - 62)
         {
+            // il faut attraper la poignée (évite les changements de niveau accidentels)
             if (auto* v = t.getVolumePlugin())
-                v->setVolumeDb (faderPosToDb (jlimit (0.0f, 1.0f, (p.x - 30.0f) / (headerW - 100.0f))));
+            {
+                auto handleX = 30.0f + (headerW - 100.0f) * dbToFaderPos (v->getVolumeDb());
+                if (std::abs (p.x - handleX) <= 8.0f)
+                {
+                    headerVolTrack = &t;
+                    headerVolStartDb = v->getVolumeDb();
+                    headerVolStartX = p.x;
+                }
+            }
         }
         else if (p.y >= top + 26 && p.y <= top + 42 && p.x >= headerW - 134 && p.x < headerW - 114)
         {
@@ -1303,11 +1363,31 @@ private:
     float valueToY (Rectangle<float> a, float v) const  { return a.getBottom() - jlimit (0.0f, 1.0f, v) * a.getHeight(); }
     float yToValue (Rectangle<float> a, float y) const  { return jlimit (0.0f, 1.0f, (a.getBottom() - y) / a.getHeight()); }
 
+    static bool autoIsPan (te::Track& t) { return t.state.getProperty ("chenAutoParam", "").toString() == "pan"; }
+
+    te::AutomatableParameter* autoParam (te::AudioTrack& t) const
+    {
+        if (auto* v = t.getVolumePlugin()) return autoIsPan (t) ? v->panParam.get() : v->volParam.get();
+        return nullptr;
+    }
+
+    static float norm (te::AutomatableParameter& p, float v)
+    {
+        auto r = p.getValueRange();
+        return (v - r.getStart()) / jmax (0.0001f, r.getLength());
+    }
+    static float denorm (te::AutomatableParameter& p, float n)
+    {
+        auto r = p.getValueRange();
+        return r.getStart() + jlimit (0.0f, 1.0f, n) * r.getLength();
+    }
+
     void drawAutomation (Graphics& g, te::AudioTrack& t, Rectangle<int> lane)
     {
-        auto* v = t.getVolumePlugin();
-        if (v == nullptr) return;
-        auto& curve = v->volParam->getCurve();
+        auto* param = autoParam (t);
+        if (param == nullptr) return;
+        bool pan = autoIsPan (t);
+        auto& curve = param->getCurve();
         auto a = automationArea (t);
 
         g.setColour (Colours::black.withAlpha (0.35f));
@@ -1317,8 +1397,8 @@ private:
         for (int x = lane.getX(); x <= lane.getRight(); x += 2)
         {
             auto time = te::TimePosition::fromSeconds (jmax (0.0, xToTime (x)));
-            auto val = curve.getNumPoints() > 0 ? curve.getValueAt (time, v->volParam->getCurrentValue()) : v->volParam->getCurrentValue();
-            auto y = valueToY (a, val);
+            auto val = curve.getNumPoints() > 0 ? curve.getValueAt (time, param->getCurrentValue()) : param->getCurrentValue();
+            auto y = valueToY (a, norm (*param, val));
             if (x == lane.getX()) p.startNewSubPath ((float) x, y); else p.lineTo ((float) x, y);
         }
         g.setColour (Col::accent);
@@ -1327,7 +1407,7 @@ private:
         for (int i = 0; i < curve.getNumPoints(); ++i)
         {
             auto x = timeToX (curve.getPointTime (i).inSeconds());
-            auto y = valueToY (a, curve.getPointValue (i));
+            auto y = valueToY (a, norm (*param, curve.getPointValue (i)));
             g.setColour (Col::bg);
             g.fillRect (x - 3, y - 3, 6.0f, 6.0f);
             g.setColour (Col::accent);
@@ -1336,15 +1416,24 @@ private:
 
         g.setColour (Col::accent.withAlpha (0.8f));
         g.setFont (uiFont (10.5f, true));
-        g.drawText ("VOLUME  " + dbString (te::volumeFaderPositionToDB (v->volParam->getCurrentValue())) + " dB",
-                    lane.getX() + 6, lane.getY() + 4, 160, 14, Justification::centredLeft);
+        auto label = pan ? String::fromUTF8 ("▾ PAN  ") + param->getCurrentValueAsStringWithLabel()
+                         : String::fromUTF8 ("▾ VOLUME  ") + dbString (te::volumeFaderPositionToDB (param->getCurrentValue())) + " dB";
+        g.drawText (label, lane.getX() + 6, lane.getY() + 4, 200, 14, Justification::centredLeft);
     }
 
     void automationMouseDown (te::AudioTrack& t, const MouseEvent& e)
     {
-        auto* v = t.getVolumePlugin();
-        if (v == nullptr) return;
-        auto& curve = v->volParam->getCurve();
+        auto* param = autoParam (t);
+        if (param == nullptr) return;
+
+        // clic sur l'étiquette : bascule volume / pan
+        if (e.x < headerW + 200 && e.y < trackTop (t) + 20)
+        {
+            t.state.setProperty ("chenAutoParam", autoIsPan (t) ? "vol" : "pan", nullptr);
+            return;
+        }
+
+        auto& curve = param->getCurve();
         auto a = automationArea (t);
         auto* um = &edit.getUndoManager();
 
@@ -1352,11 +1441,11 @@ private:
         for (int i = 0; i < curve.getNumPoints(); ++i)
         {
             auto x = timeToX (curve.getPointTime (i).inSeconds());
-            auto y = valueToY (a, curve.getPointValue (i));
+            auto y = valueToY (a, norm (*param, curve.getPointValue (i)));
             if (std::abs (x - e.position.x) < 6 && std::abs (y - e.position.y) < 6)
             {
                 if (e.mods.isAltDown() || e.mods.isPopupMenu()) { curve.removePoint (i, um); return; }
-                autoDragParam = v->volParam;
+                autoDragParam = param;
                 autoDragIndex = i;
                 autoDragTrack = &t;
                 return;
@@ -1369,9 +1458,9 @@ private:
         auto time = te::TimePosition::fromSeconds (jmax (0.0, xToTime (e.x)));
         if (transportBar.mode == TransportBar::Mode::grid) time = te::TimePosition::fromSeconds (snap (time.inSeconds()));
         if (curve.getNumPoints() == 0)   // ancre au début, pour garder le niveau actuel avant le premier point
-            curve.addPoint (te::TimePosition(), v->volParam->getCurrentValue(), 0.0f, um);
-        autoDragIndex = curve.addPoint (time, yToValue (a, e.position.y), 0.0f, um);
-        autoDragParam = v->volParam;
+            curve.addPoint (te::TimePosition(), param->getCurrentValue(), 0.0f, um);
+        autoDragIndex = curve.addPoint (time, denorm (*param, yToValue (a, e.position.y)), 0.0f, um);
+        autoDragParam = param;
         autoDragTrack = &t;
     }
 
@@ -1381,7 +1470,7 @@ private:
         auto a = automationArea (*autoDragTrack);
         auto time = te::TimePosition::fromSeconds (jmax (0.0, xToTime (e.x)));
         if (transportBar.mode == TransportBar::Mode::grid) time = te::TimePosition::fromSeconds (snap (time.inSeconds()));
-        autoDragIndex = autoDragParam->getCurve().movePoint (*autoDragParam, autoDragIndex, time, yToValue (a, e.position.y), false, &edit.getUndoManager());
+        autoDragIndex = autoDragParam->getCurve().movePoint (*autoDragParam, autoDragIndex, time, denorm (*autoDragParam, yToValue (a, e.position.y)), false, &edit.getUndoManager());
         repaint();
     }
 

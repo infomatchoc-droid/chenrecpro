@@ -5,6 +5,16 @@ Il reprend le meilleur de Cubase, Pro Tools, Logic et Ableton Live, et il est co
 
 Usage interne au studio pour l'instant.
 
+## v0.7 — « Livraison »
+
+- **Export des stems** (Fichier) : un WAV par piste (inserts, fader et automation compris), dans le dossier de ton choix.
+- **Groupes façon Pro Tools** : Ctrl+clic (ou Maj+clic) sur les en-têtes, puis Ctrl+G. Le volume (en relatif), le mute et le solo sont liés, et une pastille de couleur avec la lettre du groupe s'affiche.
+  - Ctrl en déplaçant un fader : la piste seule, hors groupe ;
+  - Ctrl+Maj+G : dégrouper.
+- **Automation du panoramique** : en vue automation (A), un clic sur l'étiquette ▾ VOLUME / ▾ PAN d'une piste bascule entre les deux courbes.
+- **Volume dans les en-têtes de piste** : il faut maintenant attraper et glisser la poignée (Maj : réglage fin, double-clic : 0 dB). Un clic à côté ne change plus le niveau.
+- **Barre d'état et transport** : plus de chevauchement sur les écrans moins larges.
+
 ## v0.6 — « Session »
 
 - **Vue Session façon Ableton Live** (Tab) : une colonne par piste, une ligne par scène.
@@ -106,6 +116,7 @@ Usage interne au studio pour l'instant.
 | Maj+R | MIDI rétrospectif |
 | Q (éditeur) | Quantifier à la double-croche |
 | Tab | Basculer Édition / Session |
+| Ctrl+G / Ctrl+Maj+G | Grouper / dégrouper |
 | A | Afficher l'automation du volume |
 | W | Écriture d'automation |
 | Ctrl+molette | Zoom horizontal |

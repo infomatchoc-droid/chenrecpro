@@ -15,6 +15,7 @@ using namespace juce;
 #include "PluginWindow.h"
 #include "PluginScanner.h"
 #include "Mixing.h"
+#include "Groups.h"
 #include "Console.h"
 #include "Playlists.h"
 #include "Comping.h"
@@ -75,15 +76,31 @@ public:
           << String::fromUTF8 ("   ·   Latence ") << (dev ? String (1000.0 * (dev->getInputLatencyInSamples() + dev->getOutputLatencyInSamples()) / jmax (1.0, dm.getSampleRate()), 1) + " ms" : String (String::fromUTF8 ("—")));
         g.setColour (Col::text3);
         g.setFont (uiFont (11.5f));
-        g.drawText (s, sb.reduced (10, 0), Justification::centredLeft);
+        auto font = uiFont (11.5f);
+        g.setFont (font);
+        auto area = sb.reduced (10, 0);
+        g.drawText (s, area, Justification::centredLeft);
+        auto leftW = GlyphArrangement::getStringWidth (font, s) + 24.0f;
 
-        g.setColour (Col::accent);
-        g.drawText (String::fromUTF8 ("F3 · Console     Espace · Lecture     R · Enregistrer     B · Séparer     Ctrl+D · Dupliquer     Maj+R · MIDI rétro     Tab · Session     A · Automation     W · Écriture"),
-                    sb.reduced (10, 0), Justification::centred);
-
+        auto right = (saved ? String::fromUTF8 ("● Projet enregistré") : String::fromUTF8 ("● Modifications non enregistrées"))
+                     + String::fromUTF8 ("   ·   ") + (edit ? editFile.getFileNameWithoutExtension() : String());
+        auto rightW = GlyphArrangement::getStringWidth (font, right) + 24.0f;
         g.setColour (saved ? Col::meterMid : Col::text2);
-        g.drawText ((saved ? String::fromUTF8 ("● Projet enregistré") : String::fromUTF8 ("● Modifications non enregistrées")) + String::fromUTF8 ("   ·   ") + (edit ? editFile.getFileNameWithoutExtension() : String()),
-                    sb.reduced (10, 0), Justification::centredRight);
+        g.drawText (right, area, Justification::centredRight);
+
+        // raccourcis : uniquement dans la place libre entre les deux textes
+        auto middle = area.withTrimmedLeft (leftW).withTrimmedRight (rightW);
+        const char* shortcuts[] = { "F3 · Console", "Espace · Lecture", "R · Enregistrer", "Tab · Session", "B · Séparer",
+                                    "Ctrl+D · Dupliquer", "Maj+R · MIDI rétro", "A · Automation", "W · Écriture" };
+        String line;
+        for (auto* sc : shortcuts)
+        {
+            auto candidate = line.isEmpty() ? String::fromUTF8 (sc) : line + "     " + String::fromUTF8 (sc);
+            if (GlyphArrangement::getStringWidth (font, candidate) > middle.getWidth()) break;
+            line = candidate;
+        }
+        g.setColour (Col::accent);
+        g.drawText (line, middle, Justification::centred);
     }
 
     void resized() override
@@ -144,6 +161,12 @@ public:
         if (code == KeyPress::homeKey || code == KeyPress::returnKey) { edit->getTransport().setPosition (0s); return true; }
         if (cmd && (code == 'S' || code == 's'))        { save(); return true; }
         if (cmd && (code == 'T' || code == 't'))        { addTrack(); return true; }
+        if (cmd && (code == 'G' || code == 'g'))
+        {
+            if (k.getModifiers().isShiftDown()) ungroupSelection();
+            else                                groupSelection();
+            return true;
+        }
         if (cmd && (code == 'I' || code == 'i'))        { importAudio(); return true; }
         if (cmd && (code == 'Z' || code == 'z'))
         {
@@ -240,6 +263,9 @@ public:
             case 4:  saveAs(); break;
             case 5:  importAudio(); break;
             case 6:  exportMix(); break;
+            case 7:  exportStems(); break;
+            case 27: groupSelection(); break;
+            case 28: ungroupSelection(); break;
             case 9:  JUCEApplication::getInstance()->systemRequestedQuit(); break;
             case 10: edit->getUndoManager().undo(); break;
             case 11: edit->getUndoManager().redo(); break;
@@ -509,6 +535,53 @@ private:
                              te::Renderer::renderToFile (String::fromUTF8 ("Export ChènRecPro"), f, *edit, range, tracksToDo, true, true, {}, true);
                              f.revealToUser();
                          });
+    }
+
+    void groupSelection()
+    {
+        auto tracks = arrange->getSelectedTracks();
+        if (tracks.size() < 2)
+        {
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "Grouper",
+                String::fromUTF8 ("Sélectionne au moins deux pistes : Ctrl+clic (ou Maj+clic) sur leurs en-têtes, puis Ctrl+G."));
+            return;
+        }
+        Groups::create (*edit, tracks);
+        arrange->multiSel.clear();
+        repaint();
+    }
+
+    void ungroupSelection()
+    {
+        for (auto* t : arrange->getSelectedTracks()) Groups::removeFromGroup (*t);
+        repaint();
+    }
+
+    /** Un fichier WAV par piste (inserts et fader compris), dans un dossier au choix. */
+    void exportStems()
+    {
+        auto fc = std::make_shared<FileChooser> (String::fromUTF8 ("Dossier des stems"), getProjectsFolder());
+        fc->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories,
+                         [this, fc] (const FileChooser&)
+        {
+            auto dir = fc->getResult();
+            if (! dir.isDirectory()) return;
+            auto all = te::getAllTracks (*edit);
+            auto range = te::TimeRange (0s, edit->getLength());
+            int n = 0;
+            for (auto* t : te::getAudioTracks (*edit))
+            {
+                if (t->getClips().isEmpty()) continue;
+                juce::BigInteger bits;
+                bits.setBit (all.indexOf (t));
+                auto f = dir.getChildFile (File::createLegalFileName (editFile.getFileNameWithoutExtension() + " - " + t->getName()) + ".wav");
+                te::Renderer::renderToFile (String::fromUTF8 ("Stem ") + t->getName(), f, *edit, range, bits, true, true, {}, true);
+                ++n;
+            }
+            dir.revealToUser();
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "Stems",
+                String (n) + String::fromUTF8 (" stem(s) exporté(s) dans :\n") + dir.getFullPathName());
+        });
     }
 
     void askTempo()
