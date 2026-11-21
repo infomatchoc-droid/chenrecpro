@@ -5,6 +5,15 @@ Il reprend le meilleur de Cubase, Pro Tools, Logic et Ableton Live, et il est co
 
 Usage interne au studio pour l'instant.
 
+## v0.10 — « Session REC »
+
+- **Enregistrement dans les cases de la vue Session**, comme dans Ableton.
+  - Arme une piste avec le ● de son en-tête de colonne : ses cases vides affichent un ● rouge. Clic sur la case pour enregistrer dedans ; re-clic pour finir la prise.
+  - À l'arrêt, la prise est calée sur des mesures entières, à partir de la première barre de mesure, et repart aussitôt en boucle. On peut enchaîner une nouvelle prise dans la case suivante pendant que la boucle tourne.
+  - Ça marche pour l'audio comme pour le MIDI (pistes instrument).
+  - Pendant la prise, seule la case enregistre : les autres pistes armées n'écrivent rien dans l'arrangement. L'écoute de l'entrée reste active.
+  - Transport arrêté, l'enregistrement démarre au début de la mesure en cours. Sinon, il démarre tout de suite et la boucle est recalée sur les mesures.
+
 ## v0.9 — « Automation »
 
 - **Automation de n'importe quel paramètre de plugin**, en plus du volume et du pan : seuil d'un compresseur, fréquence d'un EQ, mix d'une reverb, niveau des envois…

@@ -129,14 +129,226 @@ namespace Launcher
 }
 
 //==============================================================================
+/** Enregistrement dans une case de la Session (façon Ableton) :
+    l'entrée de la piste est envoyée dans la case, le reste des pistes n'enregistre pas,
+    et à l'arrêt la prise est calée sur des mesures entières puis lancée en boucle. */
+class SlotRecorder : private te::TransportControl::Listener,
+                     private Timer
+{
+public:
+    explicit SlotRecorder (te::Edit& e) : edit (e) { edit.getTransport().addListener (this); }
+    ~SlotRecorder() override
+    {
+        edit.getTransport().removeListener (this);
+        if (state != State::idle) restore();
+    }
+
+    bool isRecordingInto (const te::ClipSlot& s) const { return state != State::idle && slotID == s.itemID; }
+    bool isBusy() const { return state != State::idle; }
+    bool isStopping() const { return state == State::stopping; }
+
+    /** Temps d'enregistrement écoulé (pour l'affichage). */
+    double elapsedSeconds() const
+    {
+        if (state != State::recording || ! gotStart) return 0.0;
+        return jmax (0.0, edit.getTransport().getPosition().inSeconds() - recStart.inSeconds());
+    }
+
+    std::function<void (const String&)> onProblem;
+
+    void start (te::AudioTrack& t, te::ClipSlot& slot)
+    {
+        auto& tc = edit.getTransport();
+        if (state != State::idle) return;
+        if (tc.isRecording())
+        {
+            if (onProblem) onProblem (String::fromUTF8 ("Un enregistrement est déjà en cours dans l'arrangement."));
+            return;
+        }
+
+        Array<te::InputDeviceInstance*> ours;
+        for (auto* in : edit.getAllInputDevices())
+            if (te::isOnTargetTrack (*in, t, 0)) ours.add (in);
+        if (ours.isEmpty())
+        {
+            if (onProblem) onProblem (String::fromUTF8 ("La piste « ") + t.getName()
+                                      + String::fromUTF8 (" » n'a pas d'entrée : choisis-en une dans l'inspecteur ou l'en-tête de piste."));
+            return;
+        }
+
+        // les autres destinations armées n'enregistrent pas pendant la prise en Session
+        disabled.clear();
+        monitors.clear();
+        for (auto* in : edit.getAllInputDevices())
+            for (auto id : in->getTargets())
+                if (in->isRecordingEnabled (id))
+                {
+                    bool mine = ours.contains (in) && id == t.itemID;
+                    if (mine && in->getInputDevice().getMonitorMode() == te::InputDevice::MonitorMode::automatic)
+                    {
+                        // on continue d'entendre l'entrée alors que la piste elle-même n'enregistre plus
+                        monitors.push_back ({ &in->getInputDevice(), te::InputDevice::MonitorMode::automatic });
+                        in->getInputDevice().setMonitorMode (te::InputDevice::MonitorMode::on);
+                    }
+                    in->setRecordingEnabled (id, false);
+                    disabled.push_back ({ in, id });
+                }
+
+        slotID = slot.itemID;
+        track = &t;
+        instances.clear();
+        for (auto* in : ours)
+        {
+            auto dest = in->setTarget (slotID, false, nullptr);
+            if (dest) { (*dest)->recordEnabled = true; instances.push_back (in); }
+        }
+        if (instances.empty())
+        {
+            restore();
+            if (onProblem) onProblem (String::fromUTF8 ("Impossible d'enregistrer dans cette case."));
+            return;
+        }
+        edit.dispatchPendingUpdatesSynchronously();
+
+        if (! tc.isPlaying())
+        {
+            // départ calé sur le début de la mesure en cours
+            auto bb = edit.tempoSequence.toBarsAndBeats (tc.getPosition());
+            tc.setPosition (edit.tempoSequence.toTime (te::tempo::BarsAndBeats { bb.bars, {} }));
+        }
+        gotStart = false;
+        recStart = tc.getPosition();
+        state = State::recording;
+        tc.record (false);
+    }
+
+    /** Arrête la prise (la lecture continue) ; la prise sera lancée en boucle. */
+    void stop()
+    {
+        if (state != State::recording) return;
+        state = State::stopping;
+        stopAskedMs = Time::getMillisecondCounter();
+        auto& tc = edit.getTransport();
+        if (tc.isRecording()) tc.stopRecording (false);
+        startTimer (250);
+    }
+
+private:
+    enum class State { idle, recording, stopping };
+
+    te::Edit& edit;
+    State state = State::idle;
+    te::EditItemID slotID;
+    te::AudioTrack::Ptr track;
+    std::vector<WeakReference<te::InputDeviceInstance>> instances;
+    std::vector<std::pair<WeakReference<te::InputDeviceInstance>, te::EditItemID>> disabled;
+    std::vector<std::pair<te::InputDevice*, te::InputDevice::MonitorMode>> monitors;
+    te::TimePosition recStart;
+    bool gotStart = false;
+    uint32 stopAskedMs = 0;
+    int takeCount = 0;
+
+    void recordingStarted (te::SyncPoint start, std::optional<te::TimeRange>) override
+    {
+        if (state == State::recording) { recStart = start.time; gotStart = true; }
+    }
+
+    void recordingStopped (te::SyncPoint, bool) override
+    {
+        if (state == State::recording)   // arrêt par le transport (Stop / Espace)
+        {
+            state = State::stopping;
+            stopAskedMs = Time::getMillisecondCounter();
+            startTimer (250);
+        }
+    }
+
+    void recordingFinished (te::InputDeviceInstance&, te::EditItemID targetID,
+                            const ReferenceCountedArray<te::Clip>& clips) override
+    {
+        if (state == State::idle || targetID != slotID) return;
+        ReferenceCountedArray<te::Clip> keep (clips);
+        MessageManager::callAsync ([this, keep, alive = WeakReference<SlotRecorder> (this)]
+        {
+            if (alive == nullptr) return;
+            for (auto* c : keep) setUpLoop (*c);
+            if (! keep.isEmpty() && edit.getTransport().isPlaying())
+                Launcher::launch (*keep.getFirst());
+            restore();
+        });
+    }
+
+    void timerCallback() override
+    {
+        // aucune prise reçue (silence, entrée débranchée…) : on remet tout en place
+        if (state == State::stopping && Time::getMillisecondCounter() - stopAskedMs > 4000) restore();
+        if (state == State::idle) stopTimer();
+    }
+
+    /** Boucle sur des mesures entières, à partir de la première barre de mesure de la prise. */
+    void setUpLoop (te::Clip& c)
+    {
+        auto& ts = edit.tempoSequence;
+        const double bpm = ts.getTempoAt (recStart).getBpm();
+        auto& sig = ts.getTimeSigAt (recStart);
+        const double beatsPerBar = sig.numerator.get() * 4.0 / jmax (1, sig.denominator.get());
+        const double barSecs = beatsPerBar * 60.0 / bpm;
+
+        auto bb = ts.toBarsAndBeats (recStart);
+        auto barTime = ts.toTime (te::tempo::BarsAndBeats { bb.bars, {} });
+        if (recStart.inSeconds() - barTime.inSeconds() > 0.05)
+            barTime = ts.toTime (te::tempo::BarsAndBeats { bb.bars + 1, {} });
+        const double offset = jmax (0.0, barTime.inSeconds() - recStart.inSeconds());
+        const double len = c.getPosition().getLength().inSeconds();
+        const int bars = jmax (1, (int) std::lround ((len - offset) / barSecs));
+        const auto offsetBeats = te::BeatPosition::fromBeats (offset * bpm / 60.0);
+        const te::BeatRange loop { offsetBeats, te::BeatDuration::fromBeats (bars * beatsPerBar) };
+
+        c.setName ("Prise " + String (++takeCount));
+        if (auto* wc = dynamic_cast<te::WaveAudioClip*> (&c))
+        {
+            wc->setUsesProxy (false);
+            wc->getLoopInfo().setBpm (bpm, wc->getAudioFile().getInfo());
+            wc->setAutoTempo (true);
+            wc->setLoopRangeBeats (loop);
+        }
+        else if (auto* mc = dynamic_cast<te::MidiClip*> (&c))
+        {
+            mc->setLoopRangeBeats (loop);
+        }
+    }
+
+    void restore()
+    {
+        stopTimer();
+        for (auto& in : instances)
+            if (in != nullptr) (void) in->removeTarget (slotID, nullptr);
+        instances.clear();
+        for (auto& [in, id] : disabled)
+            if (in != nullptr) in->setRecordingEnabled (id, true);
+        disabled.clear();
+        for (auto& [dev, mode] : monitors) dev->setMonitorMode (mode);
+        monitors.clear();
+        state = State::idle;
+        track = nullptr;
+    }
+
+    JUCE_DECLARE_WEAK_REFERENCEABLE (SlotRecorder)
+};
+
+//==============================================================================
 class SessionView : public Component,
                     public FileDragAndDropTarget,
                     private Timer
 {
 public:
-    explicit SessionView (te::Edit& e) : edit (e)
+    explicit SessionView (te::Edit& e) : edit (e), recorder (e)
     {
         Launcher::ensureGrid (edit, 8);
+        recorder.onProblem = [] (const String& msg)
+        {
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, String::fromUTF8 ("Enregistrement en Session"), msg);
+        };
         startTimerHz (20);
     }
 
@@ -159,7 +371,15 @@ public:
             g.fillRoundedRectangle (r, 3.0f);
             g.setColour (Colour (0xff141414));
             g.setFont (uiFont (12.5f, true));
-            g.drawText (t->getName(), r.reduced (6, 0), Justification::centredLeft, true);
+            g.drawText (t->getName(), r.reduced (6, 0).withTrimmedRight (24), Justification::centredLeft, true);
+
+            // armement de la piste (●)
+            auto ar = armRect (i).toFloat();
+            bool armed = EngineHelpers::isTrackArmed (*t);
+            g.setColour (Colour (0xff141414).withAlpha (armed ? 0.9f : 0.35f));
+            g.fillEllipse (ar);
+            g.setColour (armed ? Col::rec : Colour (0xff141414).withAlpha (0.6f));
+            g.fillEllipse (ar.reduced (4.0f));
         }
 
         // cases
@@ -170,12 +390,38 @@ public:
             {
                 auto r = cellRect (ti, si).toFloat();
                 auto* c = si < slots.size() ? slots[si]->getClip() : nullptr;
+                bool blink = (Time::getMillisecondCounter() / 250) % 2 == 0;
+
+                if (si < slots.size() && recorder.isRecordingInto (*slots[si]))
+                {
+                    g.setColour (Col::rec.withAlpha (recorder.isStopping() ? 0.45f : (blink ? 0.95f : 0.7f)));
+                    g.fillRoundedRectangle (r, 3.0f);
+                    g.setColour (Colours::white);
+                    g.fillEllipse (r.getX() + 8, r.getCentreY() - 5, 10.0f, 10.0f);
+                    g.setFont (uiFont (12.0f, true));
+                    auto secs = recorder.elapsedSeconds();
+                    auto barSecs = 60.0 / edit.tempoSequence.getTempoAt (edit.getTransport().getPosition()).getBpm()
+                                   * edit.tempoSequence.getTimeSigAt (edit.getTransport().getPosition()).numerator.get();
+                    g.drawText (recorder.isStopping() ? String::fromUTF8 ("Finalisation…")
+                                                      : String::fromUTF8 ("Enregistrement  ") + String (secs / barSecs, 1) + " mes.",
+                                r.withTrimmedLeft (24).reduced (4, 0), Justification::centredLeft, true);
+                    continue;
+                }
+
                 if (c == nullptr)
                 {
                     g.setColour (Colour (0xff1d1e22));
                     g.fillRoundedRectangle (r, 3.0f);
-                    g.setColour (Colour (0xff35373d));
-                    g.fillRect (r.getX() + 8, r.getCentreY() - 3, 6.0f, 6.0f);   // ■ arrêt
+                    if (EngineHelpers::isTrackArmed (*tracks[ti]) && ! recorder.isBusy())
+                    {
+                        g.setColour (Col::rec.withAlpha (0.85f));                     // ● enregistrer ici
+                        g.fillEllipse (r.getX() + 8, r.getCentreY() - 5, 10.0f, 10.0f);
+                    }
+                    else
+                    {
+                        g.setColour (Colour (0xff35373d));
+                        g.fillRect (r.getX() + 8, r.getCentreY() - 3, 6.0f, 6.0f);   // ■ arrêt
+                    }
                     continue;
                 }
 
@@ -183,7 +429,6 @@ public:
                 auto lh = c->getLaunchHandle();
                 bool playing = lh && lh->getPlayingStatus() == te::LaunchHandle::PlayState::playing;
                 bool queued  = lh && lh->getQueuedStatus() == te::LaunchHandle::QueueState::playQueued;
-                bool blink   = (Time::getMillisecondCounter() / 250) % 2 == 0;
 
                 g.setColour (queued && blink ? col.brighter (0.4f) : col);
                 g.fillRoundedRectangle (r, 3.0f);
@@ -265,7 +510,7 @@ public:
 
         g.setColour (Col::text3);
         g.setFont (uiFont (11.0f));
-        g.drawText (String::fromUTF8 ("Clic : lancer  ·  case vide : arrêter la piste  ·  double-clic sur une piste instrument : nouveau clip MIDI  ·  glisser un fichier audio : clip calé au tempo  ·  clic droit : options  ·  Tab : Édition"),
+        g.drawText (String::fromUTF8 ("Clic : lancer  ·  ● sur une piste armée : enregistrer dans la case (re-clic : boucler)  ·  case vide : arrêter la piste  ·  double-clic sur une piste instrument : nouveau clip MIDI  ·  glisser un fichier audio : clip calé au tempo  ·  clic droit : options  ·  Tab : Édition"),
                     10, getHeight() - 24, getWidth() - 20, 20, Justification::centredLeft);
     }
 
@@ -275,7 +520,7 @@ public:
         auto tracks = te::getAudioTracks (edit);
         auto scenes = edit.getSceneList().getScenes();
 
-        if (stopAllRect().contains (p))  { Launcher::stopAll (edit); return; }
+        if (stopAllRect().contains (p))  { recorder.stop(); Launcher::stopAll (edit); return; }
         if (backRect().contains (p))     { Launcher::backToArrangement (edit); return; }
         if (addSceneRect().contains (p)) { Launcher::ensureGrid (edit, scenes.size() + 1); repaint(); return; }
         if (quantRect().contains (p))    { showQuantMenu(); return; }
@@ -291,6 +536,17 @@ public:
         for (int ti = 0; ti < tracks.size(); ++ti)
         {
             if (stopRect (ti).contains (p)) { Launcher::stopTrack (*tracks[ti]); return; }
+            if (armRect (ti).contains (p))
+            {
+                bool hasInput = false;
+                for (auto* in : edit.getAllInputDevices()) hasInput = hasInput || te::isOnTargetTrack (*in, *tracks[ti], 0);
+                if (! hasInput && recorder.onProblem)
+                    recorder.onProblem (String::fromUTF8 ("La piste « ") + tracks[ti]->getName()
+                                        + String::fromUTF8 (" » n'a pas d'entrée : choisis-en une dans l'inspecteur ou l'en-tête de piste (Tab pour revenir à l'Édition)."));
+                EngineHelpers::armTrack (*tracks[ti], ! EngineHelpers::isTrackArmed (*tracks[ti]));
+                repaint();
+                return;
+            }
             if (headerRect (ti).contains (p)) { if (onSelectTrack) onSelectTrack (tracks[ti]); return; }
 
             auto slots = tracks[ti]->getClipSlotList().getClipSlots();
@@ -299,6 +555,14 @@ public:
                 if (! cellRect (ti, si).contains (p)) continue;
                 if (onSelectTrack) onSelectTrack (tracks[ti]);
                 auto* c = slots[si]->getClip();
+
+                if (recorder.isRecordingInto (*slots[si])) { recorder.stop(); return; }   // re-clic : fin de la prise
+                if (c == nullptr && ! e.mods.isPopupMenu() && e.getNumberOfClicks() < 2
+                    && EngineHelpers::isTrackArmed (*tracks[ti]) && ! recorder.isBusy())
+                {
+                    recorder.start (*tracks[ti], *slots[si]);
+                    return;
+                }
 
                 if (c != nullptr && e.mods.isPopupMenu()) { showClipMenu (*c); return; }
                 if (c != nullptr)                         { Launcher::launch (*c); return; }
@@ -365,6 +629,7 @@ public:
 
 private:
     te::Edit& edit;
+    SlotRecorder recorder;
 
     te::BeatDuration clipBeats (te::Clip& c) const
     {
@@ -375,6 +640,7 @@ private:
     static constexpr int colW = 150, cellH = 38, headerH = 30, gap = 4, scenesW = 210, top = 52;
 
     Rectangle<int> headerRect (int ti) const        { return { 10 + ti * (colW + gap), top, colW, headerH }; }
+    Rectangle<int> armRect (int ti) const           { auto h = headerRect (ti); return { h.getRight() - 24, h.getCentreY() - 9, 18, 18 }; }
     Rectangle<int> cellRect (int ti, int si) const  { return { 10 + ti * (colW + gap), top + headerH + gap + si * (cellH + gap), colW, cellH }; }
     Rectangle<int> stopRect (int ti) const          { return cellRect (ti, edit.getSceneList().getNumScenes()).withHeight (26); }
     Rectangle<int> scenesColumn() const             { return { getWidth() - scenesW, 0, scenesW, getHeight() - 28 }; }
