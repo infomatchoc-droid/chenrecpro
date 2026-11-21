@@ -142,6 +142,7 @@ public:
                 case 5: EngineHelpers::toggleRecord (edit); break;
                 case 6: tr.looping = ! tr.looping.get(); break;
                 case 7: edit.clickTrackEnabled = ! edit.clickTrackEnabled.get(); break;
+                case 8: { auto res = tr.applyRetrospectiveRecord (false); ignoreUnused (res); break; }
                 default: break;
             }
             repaint();
@@ -151,7 +152,7 @@ public:
 
 private:
     te::Edit& edit;
-    static constexpr int numTransportButtons = 8;
+    static constexpr int numTransportButtons = 9;
 
     void timerCallback() override { repaint(); }
 
@@ -200,6 +201,16 @@ private:
                 g.strokePath (loop, PathStrokeType (1.6f));
                 p.addTriangle (cx + 3, cy - 6, cx + 3, cy, cx + 7, cy - 3);
                 p.addTriangle (cx - 3, cy, cx - 3, cy + 6, cx - 7, cy + 3);
+                break;
+            }
+            case 8:
+            {
+                // MIDI rétrospectif : flèche circulaire + point
+                g.setColour (Colour (0xffb993ff));
+                Path arc; arc.addCentredArc (cx, cy, 6.5f, 6.5f, 0, -2.4f, 2.0f, true);
+                g.strokePath (arc, PathStrokeType (1.6f));
+                p.addTriangle (cx - 8, cy - 4, cx - 3, cy - 6, cx - 6, cy - 0.5f);
+                p.addEllipse (cx - 1.8f, cy - 1.8f, 3.6f, 3.6f);
                 break;
             }
             case 7:
@@ -456,8 +467,43 @@ public:
     void mouseDoubleClick (const MouseEvent& e) override
     {
         auto* t = trackAt (e.y);
-        if (t != nullptr && e.x < headerW && e.y < trackTop (*t) + 26)
-            renameTrack (*t);
+        if (t == nullptr) return;
+        if (e.x < headerW)
+        {
+            if (e.y < trackTop (*t) + 26) renameTrack (*t);
+            return;
+        }
+
+        if (auto* mc = dynamic_cast<te::MidiClip*> (clipAt (*t, xToTime (e.x))))
+        {
+            if (onOpenMidiEditor) onOpenMidiEditor (mc);
+            return;
+        }
+
+        // double-clic dans le vide d'une piste instrument : nouveau clip MIDI de 4 mesures
+        if (EngineHelpers::isInstrumentTrack (*t))
+        {
+            auto& ts = edit.tempoSequence;
+            auto bb = ts.toBarsAndBeats (te::TimePosition::fromSeconds (jmax (0.0, xToTime (e.x))));
+            auto start = ts.toTime (te::tempo::BarsAndBeats { bb.bars, {} });
+            auto end   = ts.toTime (te::tempo::BarsAndBeats { bb.bars + 4, {} });
+            if (auto mc = t->insertMIDIClip ("MIDI", { start, end }, nullptr))
+            {
+                selectedClip = mc.get();
+                notifySelection();
+                if (onOpenMidiEditor) onOpenMidiEditor (mc.get());
+            }
+        }
+    }
+
+    std::function<void (te::MidiClip*)> onOpenMidiEditor;
+
+    void selectTrack (te::AudioTrack* t)
+    {
+        selectedTrack = t;
+        selectedClip = nullptr;
+        notifySelection();
+        repaint();
     }
 
     void mouseWheelMove (const MouseEvent& e, const MouseWheelDetails& w) override
@@ -581,6 +627,8 @@ public:
     bool isInterestedInFileDrag (const StringArray& files) override
     {
         for (auto& f : files)
+            if (File (f).hasFileExtension ("mid;midi")) return true;
+        for (auto& f : files)
             if (edit.engine.getAudioFileFormatManager().readFormatManager.findFormatForFileExtension (File (f).getFileExtension()) != nullptr)
                 return true;
         return false;
@@ -599,7 +647,8 @@ public:
             if (t == nullptr)
                 t = edit.insertNewAudioTrack (te::TrackInsertPoint::getEndOfTracks (edit), nullptr).get();
             if (t == nullptr) break;
-            importFile (*t, File (f), start);
+            if (File (f).hasFileExtension ("mid;midi")) importMidiFile (*t, File (f), start);
+            else                                        importFile (*t, File (f), start);
             t = nextTrack (*t);
         }
         repaint();
@@ -613,6 +662,45 @@ public:
             t.setName (f.getFileNameWithoutExtension());
         t.insertWaveClip (f.getFileNameWithoutExtension(), f,
                           { { te::TimePosition::fromSeconds (start), te::TimeDuration::fromSeconds (af.getLength()) }, {} }, false);
+    }
+
+    /** Importe un fichier MIDI (toutes les pistes fusionnées) dans un clip. */
+    void importMidiFile (te::AudioTrack& t, const File& f, double start)
+    {
+        FileInputStream in (f);
+        MidiFile mf;
+        if (! in.openedOk() || ! mf.readFrom (in)) return;
+        auto ppq = mf.getTimeFormat() > 0 ? (double) mf.getTimeFormat() : 960.0;
+
+        MidiMessageSequence all;
+        for (int i = 0; i < mf.getNumTracks(); ++i) all.addSequence (*mf.getTrack (i), 0);
+        all.updateMatchedPairs();
+
+        double lastBeat = 4.0;
+        for (auto* ev : all)
+            if (ev->message.isNoteOn() && ev->noteOffObject != nullptr)
+                lastBeat = jmax (lastBeat, ev->noteOffObject->message.getTimeStamp() / ppq);
+
+        auto& ts = edit.tempoSequence;
+        auto startT = te::TimePosition::fromSeconds (start);
+        auto startBeat = ts.toBeats (startT);
+        auto lenBeats = std::ceil (lastBeat / 4.0) * 4.0;
+        auto endT = ts.toTime (startBeat + te::BeatDuration::fromBeats (lenBeats));
+
+        if (auto mc = t.insertMIDIClip (f.getFileNameWithoutExtension(), { startT, endT }, nullptr))
+        {
+            auto& seq = mc->getSequence();
+            for (auto* ev : all)
+                if (ev->message.isNoteOn() && ev->noteOffObject != nullptr)
+                {
+                    auto b = ev->message.getTimeStamp() / ppq;
+                    auto l = jmax (0.01, ev->noteOffObject->message.getTimeStamp() / ppq - b);
+                    seq.addNote (ev->message.getNoteNumber(), te::BeatPosition::fromBeats (b), te::BeatDuration::fromBeats (l),
+                                 ev->message.getVelocity(), 0, nullptr);
+                }
+        }
+        if (t.getClips().size() == 1 && t.getName().startsWith ("Audio"))
+            t.setName (f.getFileNameWithoutExtension());
     }
 
     te::AudioTrack* getSelectedTrack() const { return selectedTrack; }
@@ -638,7 +726,12 @@ private:
     DragMode dragMode = DragMode::none;
     Component playlistAnchor;
 
-    void notifySelection() { if (onSelectionChanged) onSelectionChanged(); }
+    void notifySelection()
+    {
+        if (selectedTrack != nullptr && EngineHelpers::isInstrumentTrack (*selectedTrack))
+            EngineHelpers::routeMidiTo (*selectedTrack);
+        if (onSelectionChanged) onSelectionChanged();
+    }
 
     Rectangle<float> clipRect (te::Track& t, te::Clip& c) const
     {
@@ -841,8 +934,11 @@ private:
 
         // entrée
         String input = String::fromUTF8 ("Aucune entrée");
-        for (auto* in : edit.getAllInputDevices())
-            if (te::isOnTargetTrack (*in, t, 0)) input = in->getInputDevice().getName();
+        if (EngineHelpers::isInstrumentTrack (t))
+            input = String::fromUTF8 ("MIDI · ") + EngineHelpers::instrumentName (t);
+        else
+            for (auto* in : edit.getAllInputDevices())
+                if (te::isOnTargetTrack (*in, t, 0)) input = in->getInputDevice().getName();
         g.setColour (Col::text3);
         g.setFont (uiFont (11.0f));
         g.drawText (input, r.getX() + 30, r.getY() + 27, r.getWidth() - 150, 14, Justification::centredLeft, true);
@@ -995,6 +1091,9 @@ private:
             g.setFont (uiFont (11.0f, true));
             g.drawText (c->getName(), hdr.reduced (5, 0), Justification::centredLeft, true);
 
+            if (auto* mc = dynamic_cast<te::MidiClip*> (c))
+                drawMidiNotes (g, *mc, cr.reduced (0, 3), col);
+
             if (auto* wac = dynamic_cast<te::WaveAudioClip*> (c))
             {
                 drawWaveform (g, *wac, cr.reduced (0, 2), col);
@@ -1014,6 +1113,24 @@ private:
             g.fillRoundedRectangle (x1, (float) r.getY() + 2, jmax (2.0f, x2 - x1), (float) r.getHeight() - 5, 3);
             g.setColour (Col::rec);
             g.drawRoundedRectangle (x1, (float) r.getY() + 2, jmax (2.0f, x2 - x1), (float) r.getHeight() - 5, 3, 1);
+        }
+    }
+
+    void drawMidiNotes (Graphics& g, te::MidiClip& c, Rectangle<float> area, Colour col)
+    {
+        auto& seq = c.getSequence();
+        if (seq.getNumNotes() == 0) return;
+        auto range = seq.getNoteNumberRange();
+        auto lo = range.getStart() - 1, hi = jmax (range.getEnd() + 1, lo + 12);
+        auto noteH = jmax (1.5f, area.getHeight() / (float) (hi - lo + 1));
+        g.setColour (col.brighter (0.4f));
+        for (auto* n : seq.getNotes())
+        {
+            auto t1 = c.getTimeOfContentBeat (n->getBeatPosition()).inSeconds();
+            auto t2 = c.getTimeOfContentBeat (n->getBeatPosition() + n->getLengthBeats()).inSeconds();
+            auto x1 = timeToX (t1), x2 = timeToX (t2);
+            auto y = area.getBottom() - (n->getNoteNumber() - lo + 1) * noteH;
+            g.fillRect (x1, y, jmax (1.5f, x2 - x1 - 1), jmax (1.5f, noteH - 0.5f));
         }
     }
 

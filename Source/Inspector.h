@@ -76,7 +76,7 @@ public:
         g.setFont (uiFont (14.0f, true));
         g.drawText (track->getName(), head.reduced (10, 0), Justification::centredLeft, true);
         g.setFont (uiFont (11.0f));
-        g.drawText ("Audio", head.reduced (10, 0), Justification::centredRight);
+        g.drawText (EngineHelpers::isInstrumentTrack (*track) ? "Instrument" : "Audio", head.reduced (10, 0), Justification::centredRight);
 
         int y = 34;
         auto row = [&] (const String& label, const String& value, Colour vc = Col::text)

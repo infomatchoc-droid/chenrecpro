@@ -18,6 +18,7 @@ using namespace juce;
 #include "Playlists.h"
 #include "EditView.h"
 #include "Inspector.h"
+#include "PianoRoll.h"
 
 namespace chen
 {
@@ -43,6 +44,7 @@ public:
     {
         consoleWindow = nullptr;
         if (edit != nullptr) save();
+        pianoRoll = nullptr;
         inspector = nullptr;
         arrange = nullptr;
         transportBar = nullptr;
@@ -72,7 +74,7 @@ public:
         g.drawText (s, sb.reduced (10, 0), Justification::centredLeft);
 
         g.setColour (Col::accent);
-        g.drawText (String::fromUTF8 ("F3 · Console     Espace · Lecture     R · Enregistrer     B · Séparer     Ctrl+D · Dupliquer     I · Inspecteur"),
+        g.drawText (String::fromUTF8 ("F3 · Console     Espace · Lecture     R · Enregistrer     B · Séparer     Ctrl+D · Dupliquer     Maj+R · MIDI rétro     Ctrl+Maj+T · Instrument"),
                     sb.reduced (10, 0), Justification::centred);
 
         g.setColour (saved ? Col::meterMid : Col::text2);
@@ -85,6 +87,7 @@ public:
         auto r = getLocalBounds();
         r.removeFromBottom (statusH);
         if (transportBar) transportBar->setBounds (r.removeFromTop (58));
+        if (pianoRoll && pianoRoll->isVisible()) pianoRoll->setBounds (r.removeFromBottom (jmin (380, r.getHeight() / 2)));
         if (inspector) { inspector->setVisible (showInspector); if (showInspector) inspector->setBounds (r.removeFromLeft (Inspector::width)); }
         if (arrange) arrange->setBounds (r);
     }
@@ -97,6 +100,16 @@ public:
             File f (p.unquoted());
             if (! f.existsAsFile()) continue;
             if (f.hasFileExtension (projectExtension) || f.hasFileExtension ("tracktionedit")) { openOrCreate (f); continue; }
+            if (f.hasFileExtension ("mid;midi"))
+            {
+                if (auto t = edit->insertNewAudioTrack (te::TrackInsertPoint::getEndOfTracks (*edit), nullptr))
+                {
+                    t->setName (f.getFileNameWithoutExtension());
+                    t->setColour (Colour (0xffa687e6));
+                    arrange->importMidiFile (*t, f, 0.0);
+                }
+                continue;
+            }
             if (auto t = edit->insertNewAudioTrack (te::TrackInsertPoint::getEndOfTracks (*edit), nullptr))
             {
                 auto n = te::getAudioTracks (*edit).size() - 1;
@@ -114,7 +127,14 @@ public:
 
         if (code == KeyPress::F3Key)                    { toggleConsole(); return true; }
         if (code == KeyPress::spaceKey)                 { EngineHelpers::togglePlay (*edit); return true; }
+        if (! cmd && k.getModifiers().isShiftDown() && (code == 'R' || code == 'r' || code == KeyPress::numberPadMultiply))
+        {
+            auto res = edit->getTransport().applyRetrospectiveRecord (false);   // MIDI rétrospectif
+            ignoreUnused (res);
+            return true;
+        }
         if (! cmd && (code == 'R' || code == 'r' || code == KeyPress::numberPadMultiply)) { EngineHelpers::toggleRecord (*edit); return true; }
+        if (cmd && k.getModifiers().isShiftDown() && (code == 'T' || code == 't')) { addInstrumentTrack(); return true; }
         if (code == KeyPress::homeKey || code == KeyPress::returnKey) { edit->getTransport().setPosition (0s); return true; }
         if (cmd && (code == 'S' || code == 's'))        { save(); return true; }
         if (cmd && (code == 'T' || code == 't'))        { addTrack(); return true; }
@@ -158,6 +178,7 @@ public:
                 break;
             case 2:
                 m.addItem (20, "Nouvelle piste audio\tCtrl+T");
+                m.addItem (24, String::fromUTF8 ("Nouvelle piste instrument…\tCtrl+Maj+T"));
                 m.addItem (21, String::fromUTF8 ("Supprimer la piste sélectionnée"));
                 m.addSeparator();
                 m.addItem (22, String::fromUTF8 ("Tempo du projet…"));
@@ -173,6 +194,7 @@ public:
                 m.addItem (42, String::fromUTF8 ("Retour au début\tEntrée"));
                 m.addItem (43, "Boucle\tL", true, edit && edit->getTransport().looping.get());
                 m.addItem (44, String::fromUTF8 ("Métronome\tC"), true, edit && edit->clickTrackEnabled.get());
+                m.addItem (45, String::fromUTF8 ("MIDI rétrospectif\tMaj+R"));
                 break;
             case 5:
                 m.addItem (50, String::fromUTF8 ("Gestionnaire de plugins…"));
@@ -204,6 +226,8 @@ public:
             case 10: edit->getUndoManager().undo(); break;
             case 11: edit->getUndoManager().redo(); break;
             case 20: addTrack(); break;
+            case 24: addInstrumentTrack(); break;
+            case 45: { auto res = edit->getTransport().applyRetrospectiveRecord (false); ignoreUnused (res); break; }
             case 21: if (auto* t = arrange->getSelectedTrack()) edit->deleteTrack (t); break;
             case 22: askTempo(); break;
             case 23: addMarker(); break;
@@ -230,6 +254,8 @@ private:
     std::unique_ptr<TransportBar> transportBar;
     std::unique_ptr<ArrangeView> arrange;
     std::unique_ptr<Inspector> inspector;
+    std::unique_ptr<PianoRoll> pianoRoll;
+    Component menuAnchor;
     bool showInspector = true;
     std::unique_ptr<ConsoleWindow> consoleWindow;
     bool saved = true;
@@ -254,6 +280,7 @@ private:
     {
         consoleWindow = nullptr;
         if (edit != nullptr) save();
+        pianoRoll = nullptr;
         inspector = nullptr;
         arrange = nullptr;
         transportBar = nullptr;
@@ -282,6 +309,11 @@ private:
         arrange = std::make_unique<ArrangeView> (*edit, *transportBar);
         inspector = std::make_unique<Inspector> (*edit, *arrange);
         arrange->onSelectionChanged = [this] { if (inspector) inspector->refresh(); };
+        pianoRoll = std::make_unique<PianoRoll> (*edit);
+        addChildComponent (*pianoRoll);
+        pianoRoll->onClose = [this] { pianoRoll->setVisible (false); pianoRoll->setClip (nullptr); resized(); arrange->grabKeyboardFocus(); };
+        arrange->onOpenMidiEditor = [this] (te::MidiClip* c) { openMidiEditor (c); };
+        EngineHelpers::enableMidiInputs (*edit);
         addAndMakeVisible (*transportBar);
         addAndMakeVisible (*arrange);
         addAndMakeVisible (*inspector);
@@ -320,6 +352,44 @@ private:
             t->setName ("Audio " + String (n + 1));
             t->setColour (Col::track (n));
         }
+        saved = false;
+    }
+
+    void openMidiEditor (te::MidiClip* c)
+    {
+        pianoRoll->setClip (c);
+        pianoRoll->setVisible (c != nullptr);
+        resized();
+        pianoRoll->grabKeyboardFocus();
+    }
+
+    void addInstrumentTrack()
+    {
+        auto n = 0;
+        for (auto* t : te::getAudioTracks (*edit)) if (EngineHelpers::isInstrumentTrack (*t)) ++n;
+        auto t = edit->insertNewAudioTrack (te::TrackInsertPoint::getEndOfTracks (*edit), nullptr);
+        if (t == nullptr) return;
+        t->setName ("Instrument " + String (n + 1));
+        t->setColour (Colour (0xffa687e6));
+        arrange->selectTrack (t.get());
+
+        menuAnchor.setBounds (Inspector::width + 260, 120, 10, 10);
+        addChildComponent (menuAnchor);
+        te::Track::Ptr keep (t.get());
+        InsertMenu::show (engine, menuAnchor, false, [this, keep] (InsertMenu::Choice c)
+        {
+            auto* at = dynamic_cast<te::AudioTrack*> (keep.get());
+            if (at == nullptr || c.remove || c.manager) return;
+            te::Plugin::Ptr p = c.builtinType.isNotEmpty()
+                                  ? edit->getPluginCache().createNewPlugin (c.builtinType, {})
+                                  : edit->getPluginCache().createNewPlugin (te::ExternalPlugin::xmlTypeName, c.desc);
+            if (p == nullptr) return;
+            at->pluginList.insertPlugin (p, 0, nullptr);
+            at->setName (p->getName());
+            EngineHelpers::routeMidiTo (*at);
+            arrange->selectTrack (at);
+            p->showWindowExplicitly();
+        }, true);
         saved = false;
     }
 
@@ -468,9 +538,19 @@ private:
             w->setName (String::fromUTF8 ("ChènRecPro — ") + editFile.getFileNameWithoutExtension());
     }
 
+    int autosaveTicks = 0;
+
     void timerCallback() override
     {
         if (edit && edit->hasChangedSinceSaved()) saved = false;
+
+        // sauvegarde automatique toutes les 60 s (jamais pendant un enregistrement)
+        if (++autosaveTicks >= 120)
+        {
+            autosaveTicks = 0;
+            if (edit && ! saved && ! edit->getTransport().isRecording())
+                save();
+        }
         repaint (getLocalBounds().removeFromBottom (statusH));
     }
 };

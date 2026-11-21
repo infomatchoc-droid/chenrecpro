@@ -65,12 +65,17 @@ public:
         for (auto* param : plugin.getAutomatableParameters())
         {
             auto* k = knobs.add (new Knob (*param));
-            addAndMakeVisible (k->slider);
-            addAndMakeVisible (k->label);
+            content.addAndMakeVisible (k->slider);
+            content.addAndMakeVisible (k->label);
         }
-        auto cols = jlimit (1, 6, knobs.size());
+        addAndMakeVisible (viewport);
+        viewport.setViewedComponent (&content, false);
+        viewport.setScrollBarsShown (true, false);
+
+        cols = knobs.size() > 24 ? 8 : jlimit (1, 6, knobs.size());
         auto rows = (knobs.size() + cols - 1) / jmax (1, cols);
-        setSize (jmax (480, cols * 110 + 40), jmax (140, rows * 130 + 70));
+        content.setSize (cols * 110 + 20, rows * 130 + 10);
+        setSize (jmax (480, content.getWidth() + 24), jlimit (140, 660, content.getHeight() + 60));
         startTimerHz (10);
     }
 
@@ -96,11 +101,11 @@ public:
 
     void resized() override
     {
-        auto cols = jlimit (1, 6, knobs.size());
+        viewport.setBounds (getLocalBounds().withTrimmedTop (54));
         int i = 0;
         for (auto* k : knobs)
         {
-            int x = 20 + (i % cols) * 110, y = 60 + (i / cols) * 130;
+            int x = 10 + (i % cols) * 110, y = 6 + (i / cols) * 130;
             k->slider.setBounds (x + 15, y, 80, 92);
             k->label.setBounds (x, y + 92, 110, 16);
             ++i;
@@ -136,6 +141,9 @@ private:
 
     te::Plugin& plugin;
     OwnedArray<Knob> knobs;
+    Viewport viewport;
+    Component content;
+    int cols = 6;
 
     void timerCallback() override
     {

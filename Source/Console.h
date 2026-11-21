@@ -20,7 +20,7 @@ struct InsertMenu
 
     struct Choice { String builtinType; PluginDescription desc; bool remove = false, manager = false; };
 
-    static void show (te::Engine& engine, Component& target, bool slotFilled, std::function<void (Choice)> cb)
+    static void show (te::Engine& engine, Component& target, bool slotFilled, std::function<void (Choice)> cb, bool instrumentsOnly = false)
     {
         auto& list = engine.getPluginManager().knownPluginList;
         auto types = list.getTypes();
@@ -80,10 +80,19 @@ struct InsertMenu
             if (d.isInstrument)
                 add (instMakers[d.manufacturerName.isEmpty() ? String ("Inconnu") : d.manufacturerName], d.name, { {}, d }, d.pluginFormatName);
         for (auto& [n, m] : instMakers) inst.addSubMenu (n, m);
+        inst.addSeparator();
+        add (inst, String::fromUTF8 ("4OSC (synthé intégré)"), { te::FourOscPlugin::xmlTypeName, {} });
+        add (inst, String::fromUTF8 ("Sampler (intégré)"),     { te::SamplerPlugin::xmlTypeName, {} });
 
         add (root, "aucun insert", { {}, {}, true }, {}, slotFilled);
         root.addSeparator();
         root.addSubMenu ("plug-in", fx);
+        if (instrumentsOnly)
+        {
+            inst.showMenuAsync (PopupMenu::Options().withTargetComponent (&target),
+                                [results, cb] (int r) { if (auto it = results.find (r); it != results.end()) cb (it->second); });
+            return;
+        }
         root.addSubMenu ("instrument", inst, inst.getNumItems() > 0);
         root.addSeparator();
         add (root, String::fromUTF8 ("Gestionnaire de plugins…"), { {}, {}, false, true });

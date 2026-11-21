@@ -5,6 +5,22 @@ Il reprend le meilleur de Cubase, Pro Tools, Logic et Ableton Live, et il est co
 
 Usage interne au studio pour l'instant.
 
+## v0.3 — « Composition »
+
+- **Pistes instrument** (Ctrl+Maj+T) : choix d'un instrument VST3, ou des instruments intégrés 4OSC et Sampler.
+- **Le MIDI suit la sélection**, comme dans Cubase : les claviers maîtres jouent la piste instrument sélectionnée.
+- **Enregistrement MIDI** sur la piste armée.
+- **MIDI rétrospectif** (Maj+R ou bouton violet du transport) : récupère ce qui a été joué sans enregistrer.
+- **Clips MIDI** : un double-clic dans le vide d'une piste instrument crée un clip de 4 mesures. Les notes sont visibles dans la zone de montage.
+- **Éditeur clavier** (double-clic sur un clip MIDI) :
+  - ajouter, déplacer et allonger des notes, Alt+clic pour supprimer ;
+  - couloir des vélocités ;
+  - quantification avec Q, transposition avec ↑/↓ (Maj : par octave) ;
+  - écoute des notes en les cliquant.
+- **Import de fichiers .mid** par glisser-déposer.
+- **Sauvegarde automatique** toutes les 60 s.
+- Les plugins intégrés qui ont beaucoup de réglages s'ouvrent dans une fenêtre défilante.
+
 ## v0.2 — « Prises »
 
 - **Logo** : la tête de Pistache (photo) dans la barre et l'icône.
@@ -53,6 +69,9 @@ Usage interne au studio pour l'instant.
 | Ctrl+D | Dupliquer le clip |
 | Ctrl+Maj+↑/↓ | Gain de clip ±1 dB |
 | I | Afficher / masquer l'inspecteur |
+| Ctrl+Maj+T | Nouvelle piste instrument |
+| Maj+R | MIDI rétrospectif |
+| Q (éditeur) | Quantifier à la double-croche |
 | Ctrl+molette | Zoom horizontal |
 
 ## Compiler
