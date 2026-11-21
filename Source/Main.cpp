@@ -5,6 +5,11 @@
 
 #include <JuceHeader.h>
 
+// VariVox (correction de justesse) : moteur et éditeur de notes du plugin
+#include "Take.h"
+#include "NoteView.h"
+#include "Audition.h"
+
 namespace te = tracktion;
 using namespace std::literals;
 using namespace juce;
@@ -23,6 +28,7 @@ using namespace juce;
 #include "Inspector.h"
 #include "PianoRoll.h"
 #include "SessionView.h"
+#include "VariVoxPanel.h"
 
 namespace chen
 {
@@ -49,6 +55,7 @@ public:
         consoleWindow = nullptr;
         if (edit != nullptr) save();
         session = nullptr;
+        variVox = nullptr;
         pianoRoll = nullptr;
         inspector = nullptr;
         arrange = nullptr;
@@ -109,6 +116,7 @@ public:
         r.removeFromBottom (statusH);
         if (transportBar) transportBar->setBounds (r.removeFromTop (58));
         if (pianoRoll && pianoRoll->isVisible()) pianoRoll->setBounds (r.removeFromBottom (jmin (380, r.getHeight() / 2)));
+        if (variVox && variVox->isVisible()) variVox->setBounds (r.removeFromBottom (jmin (460, r.getHeight() * 11 / 20)));
         if (inspector) { inspector->setVisible (showInspector); if (showInspector) inspector->setBounds (r.removeFromLeft (Inspector::width)); }
         if (arrange) { arrange->setVisible (! showSession); arrange->setBounds (r); }
         if (session) { session->setVisible (showSession); session->setBounds (r); }
@@ -304,6 +312,7 @@ private:
     std::unique_ptr<ArrangeView> arrange;
     std::unique_ptr<Inspector> inspector;
     std::unique_ptr<PianoRoll> pianoRoll;
+    std::unique_ptr<VariVoxPanel> variVox;
     std::unique_ptr<SessionView> session;
     bool showSession = false;
     Component menuAnchor;
@@ -332,6 +341,7 @@ private:
         consoleWindow = nullptr;
         if (edit != nullptr) save();
         session = nullptr;
+        variVox = nullptr;
         pianoRoll = nullptr;
         inspector = nullptr;
         arrange = nullptr;
@@ -367,6 +377,10 @@ private:
         addChildComponent (*pianoRoll);
         pianoRoll->onClose = [this] { pianoRoll->setVisible (false); pianoRoll->setClip (nullptr); resized(); arrange->grabKeyboardFocus(); };
         arrange->onOpenMidiEditor = [this] (te::MidiClip* c) { openMidiEditor (c); };
+        variVox = std::make_unique<VariVoxPanel> (*edit);
+        addChildComponent (*variVox);
+        variVox->onClose = [this] { variVox->setVisible (false); variVox->setClip (nullptr); resized(); arrange->grabKeyboardFocus(); };
+        arrange->onOpenVariVox = [this] (te::WaveAudioClip* c) { openVariVox (c); };
         session = std::make_unique<SessionView> (*edit);
         addChildComponent (*session);
         session->onOpenMidiEditor = [this] (te::MidiClip* c) { openMidiEditor (c); };
@@ -413,8 +427,18 @@ private:
         saved = false;
     }
 
+    void openVariVox (te::WaveAudioClip* c)
+    {
+        if (pianoRoll->isVisible()) pianoRoll->onClose();
+        variVox->setClip (c);
+        variVox->setVisible (c != nullptr);
+        resized();
+        variVox->grabFocusOnEditor();
+    }
+
     void openMidiEditor (te::MidiClip* c)
     {
+        if (variVox && variVox->isVisible()) variVox->onClose();
         pianoRoll->setClip (c);
         pianoRoll->setVisible (c != nullptr);
         resized();
@@ -454,6 +478,7 @@ private:
     void save()
     {
         if (edit == nullptr) return;
+        if (variVox) variVox->flush();
         te::EditFileOperations (*edit).save (true, true, false);
         saved = true;
         repaint();

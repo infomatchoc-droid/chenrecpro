@@ -560,6 +560,13 @@ public:
             return;
         }
 
+        // double-clic sur un clip audio : VariVox (comme l'éditeur d'échantillons / VariAudio de Cubase)
+        if (auto* wc = dynamic_cast<te::WaveAudioClip*> (clipAt (*t, xToTime (e.x))))
+        {
+            if (onOpenVariVox) onOpenVariVox (wc);
+            return;
+        }
+
         // double-clic dans le vide d'une piste instrument : nouveau clip MIDI de 4 mesures
         if (EngineHelpers::isInstrumentTrack (*t))
         {
@@ -577,6 +584,7 @@ public:
     }
 
     std::function<void (te::MidiClip*)> onOpenMidiEditor;
+    std::function<void (te::WaveAudioClip*)> onOpenVariVox;
 
     bool automationView = false;
     void toggleAutomationView() { automationView = ! automationView; repaint(); }
@@ -684,6 +692,11 @@ public:
         m.addItem (5, String::fromUTF8 ("Gain de clip −1 dB\tCtrl+Maj+↓"));
         m.addItem (6, String::fromUTF8 ("Gain de clip à 0 dB"));
         m.addItem (7, "Retirer les fondus");
+        if (dynamic_cast<te::WaveAudioClip*> (selectedClip.get()) != nullptr)
+        {
+            m.addSeparator();
+            m.addItem (8, String::fromUTF8 ("Corriger la justesse (VariVox)…\tdouble-clic"));
+        }
         m.showMenuAsync (PopupMenu::Options(), [this, sp = SafePointer<ArrangeView> (this)] (int r)
         {
             if (sp == nullptr || selectedClip == nullptr) return;
@@ -692,6 +705,7 @@ public:
             if (r == 3) { selectedClip->removeFromParent(); selectedClip = nullptr; }
             if (r == 4) nudgeClipGain (1.0f);
             if (r == 5) nudgeClipGain (-1.0f);
+            if (r == 8) if (auto* wc = dynamic_cast<te::WaveAudioClip*> (selectedClip.get())) if (onOpenVariVox) onOpenVariVox (wc);
             if (auto* a = dynamic_cast<te::AudioClipBase*> (selectedClip.get()))
             {
                 if (r == 6) a->setGainDB (0.0f);
@@ -1221,6 +1235,15 @@ private:
             g.setColour (Colour (0xd90a0a0c));
             g.setFont (uiFont (11.0f, true));
             g.drawText (c->getName(), hdr.reduced (5, 0), Justification::centredLeft, true);
+            if (c->state.hasProperty ("chenOriginalSource") && hdr.getWidth() > 90)   // voix corrigée par VariVox
+            {
+                auto badge = hdr.removeFromRight (24).reduced (2, 2);
+                g.setColour (Colour (0xd90a0a0c));
+                g.fillRoundedRectangle (badge.toFloat(), 2.0f);
+                g.setColour (Col::accent);
+                g.setFont (uiFont (8.5f, true));
+                g.drawText ("VV", badge, Justification::centred);
+            }
 
             if (auto* mc = dynamic_cast<te::MidiClip*> (c))
                 drawMidiNotes (g, *mc, cr.reduced (0, 3), col);

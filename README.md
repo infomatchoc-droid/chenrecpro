@@ -5,6 +5,19 @@ Il reprend le meilleur de Cubase, Pro Tools, Logic et Ableton Live, et il est co
 
 Usage interne au studio pour l'instant.
 
+## v0.8 — « VariVox »
+
+- **VariVox intégré**, comme VariAudio dans Cubase : double-clic sur un clip audio (ou clic droit › « Corriger la justesse (VariVox)… ») ouvre la zone basse VariVox.
+  - La voix est analysée en notes. On retrouve les outils du plugin Chènevières VariVox, avec le même moteur :
+    - onglets Hauteur, Segments et Niveau ;
+    - potards Quantifier, Redresser, Transitions, Formant, ainsi que Niveler, Cible, Respirations et Sibilantes ;
+    - gamme avec « Détecter », versions A/B, annuler/rétablir.
+  - Le clip joue la voix corrigée **dans le projet**, en direct : chaque correction est calculée puis écrite dans le dossier « <projet> - VariVox ».
+  - « Original » fait entendre la prise d'origine dans le mix ; « Retirer VariVox » remet le clip comme avant.
+  - Clic sur une note, transport arrêté : on l'écoute seule.
+  - Les corrections sont enregistrées avec le projet et retrouvées à la réouverture. Les clips corrigés portent un badge « VV ».
+  - Limite actuelle : pas de clip étiré (warp) ni en boucle.
+
 ## v0.7 — « Livraison »
 
 - **Export des stems** (Fichier) : un WAV par piste (inserts, fader et automation compris), dans le dossier de ton choix.

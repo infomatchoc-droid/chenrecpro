@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(ChenRecPro VERSION 0.7.0 LANGUAGES C CXX)
+project(ChenRecPro VERSION 0.8.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,10 +29,19 @@ juce_add_gui_app(ChenRecPro
     NEEDS_CURL FALSE
     NEEDS_WEB_BROWSER FALSE)
 
-juce_add_binary_data(ChenRecProData SOURCES Resources/pistache.png)
+set(VV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/varivox")
+juce_add_binary_data(ChenRecProData SOURCES Resources/pistache.png
+    "${VV_DIR}/Resources/Cormorant-Italic.ttf" "${VV_DIR}/Resources/Cinzel-Regular.ttf")
 set_target_properties(ChenRecProData PROPERTIES POSITION_INDEPENDENT_CODE ON)
 juce_generate_juce_header(ChenRecPro)
-target_sources(ChenRecPro PRIVATE Source/Main.cpp)
+target_sources(ChenRecPro PRIVATE Source/Main.cpp
+    # VariVox (correction de justesse, Studio des Chènevières) : moteur + éditeur de notes
+    "${VV_DIR}/Source/Engine/Analysis.cpp"
+    "${VV_DIR}/Source/Engine/Render.cpp"
+    "${VV_DIR}/Source/Take.cpp"
+    "${VV_DIR}/Source/NoteView.cpp"
+    "${VV_DIR}/Source/NoteViewLevel.cpp")
+target_include_directories(ChenRecPro PRIVATE "${VV_DIR}/Source")
 
 target_compile_definitions(ChenRecPro PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:ChenRecPro,JUCE_PRODUCT_NAME>"
