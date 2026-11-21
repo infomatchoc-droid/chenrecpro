@@ -588,6 +588,7 @@ public:
 
     bool automationView = false;
     void toggleAutomationView() { automationView = ! automationView; repaint(); }
+    void showAutomationView() { automationView = true; repaint(); }
 
     void selectTrack (te::AudioTrack* t)
     {
@@ -1386,13 +1387,7 @@ private:
     float valueToY (Rectangle<float> a, float v) const  { return a.getBottom() - jlimit (0.0f, 1.0f, v) * a.getHeight(); }
     float yToValue (Rectangle<float> a, float y) const  { return jlimit (0.0f, 1.0f, (a.getBottom() - y) / a.getHeight()); }
 
-    static bool autoIsPan (te::Track& t) { return t.state.getProperty ("chenAutoParam", "").toString() == "pan"; }
-
-    te::AutomatableParameter* autoParam (te::AudioTrack& t) const
-    {
-        if (auto* v = t.getVolumePlugin()) return autoIsPan (t) ? v->panParam.get() : v->volParam.get();
-        return nullptr;
-    }
+    te::AutomatableParameter* autoParam (te::AudioTrack& t) const { return Automation::shown (t); }
 
     static float norm (te::AutomatableParameter& p, float v)
     {
@@ -1409,7 +1404,6 @@ private:
     {
         auto* param = autoParam (t);
         if (param == nullptr) return;
-        bool pan = autoIsPan (t);
         auto& curve = param->getCurve();
         auto a = automationArea (t);
 
@@ -1437,11 +1431,27 @@ private:
             g.drawRect (x - 3, y - 3, 6.0f, 6.0f, 1.2f);
         }
 
-        g.setColour (Col::accent.withAlpha (0.8f));
+        // étiquette : paramètre affiché (clic : choisir), valeur, autres paramètres automatisés
+        auto name = Automation::displayName (t, *param);
+        auto label = String::fromUTF8 ("▾ ") + name + "   " + Automation::valueText (t, *param);
         g.setFont (uiFont (10.5f, true));
-        auto label = pan ? String::fromUTF8 ("▾ PAN  ") + param->getCurrentValueAsStringWithLabel()
-                         : String::fromUTF8 ("▾ VOLUME  ") + dbString (te::volumeFaderPositionToDB (param->getCurrentValue())) + " dB";
-        g.drawText (label, lane.getX() + 6, lane.getY() + 4, 200, 14, Justification::centredLeft);
+        auto w = jmin (lane.getWidth() - 12, GlyphArrangement::getStringWidthInt (g.getCurrentFont(), label) + 14);
+        auto tag = Rectangle<int> (lane.getX() + 4, lane.getY() + 3, w, 16);
+        g.setColour (Colour (0xcc0c0d10));
+        g.fillRoundedRectangle (tag.toFloat(), 3.0f);
+        g.setColour (Col::accent);
+        g.drawText (label, tag.reduced (6, 0), Justification::centredLeft, true);
+        int others = Automation::countAutomated (t) - (curve.getNumPoints() > 0 ? 1 : 0);
+        if (others > 0)
+        {
+            auto txt = String::fromUTF8 ("+ ") + String (others) + String::fromUTF8 (others > 1 ? " autres paramètres automatisés" : " autre paramètre automatisé");
+            g.setFont (uiFont (10.0f));
+            auto r2 = Rectangle<int> (tag.getRight() + 4, tag.getY(), GlyphArrangement::getStringWidthInt (g.getCurrentFont(), txt) + 12, 16);
+            g.setColour (Colour (0xcc0c0d10));
+            g.fillRoundedRectangle (r2.toFloat(), 3.0f);
+            g.setColour (Col::text2);
+            g.drawText (txt, r2.reduced (6, 0), Justification::centredLeft);
+        }
     }
 
     void automationMouseDown (te::AudioTrack& t, const MouseEvent& e)
@@ -1449,10 +1459,10 @@ private:
         auto* param = autoParam (t);
         if (param == nullptr) return;
 
-        // clic sur l'étiquette : bascule volume / pan
-        if (e.x < headerW + 200 && e.y < trackTop (t) + 20)
+        // clic sur l'étiquette : choisir le paramètre (volume, pan, envois, plugins)
+        if (e.x < headerW + 240 && e.y < trackTop (t) + 22)
         {
-            t.state.setProperty ("chenAutoParam", autoIsPan (t) ? "vol" : "pan", nullptr);
+            Automation::showMenu (t, [sp = SafePointer<ArrangeView> (this)] { if (sp) sp->repaint(); });
             return;
         }
 

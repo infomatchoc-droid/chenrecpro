@@ -381,6 +381,13 @@ private:
         addChildComponent (*variVox);
         variVox->onClose = [this] { variVox->setVisible (false); variVox->setClip (nullptr); resized(); arrange->grabKeyboardFocus(); };
         arrange->onOpenVariVox = [this] (te::WaveAudioClip* c) { openVariVox (c); };
+        Automation::onShowLane() = [this] (te::Track& t)
+        {
+            if (arrange == nullptr) return;
+            if (showSession) { showSession = false; resized(); }
+            arrange->showAutomationView();
+            if (auto* at = dynamic_cast<te::AudioTrack*> (&t)) arrange->selectTrack (at);
+        };
         session = std::make_unique<SessionView> (*edit);
         addChildComponent (*session);
         session->onOpenMidiEditor = [this] (te::MidiClip* c) { openMidiEditor (c); };

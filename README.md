@@ -5,6 +5,14 @@ Il reprend le meilleur de Cubase, Pro Tools, Logic et Ableton Live, et il est co
 
 Usage interne au studio pour l'instant.
 
+## v0.9 — « Automation »
+
+- **Automation de n'importe quel paramètre de plugin**, en plus du volume et du pan : seuil d'un compresseur, fréquence d'un EQ, mix d'une reverb, niveau des envois…
+  - Vue automation (A) : clic sur l'étiquette de la courbe › menu Volume, Pan, Envois, puis chaque insert (A à J) avec tous ses paramètres. Un ● signale les paramètres déjà automatisés, et l'étiquette indique combien d'autres paramètres de la piste sont automatisés.
+  - **Bouton AUTO** dans la fenêtre des plugins, comme dans Pro Tools : il propose en tête le **dernier paramètre touché** dans le plugin, puis toute la liste. Le choisir affiche aussitôt sa courbe sur la piste. AUTO reste allumé quand le plugin a de l'automation.
+  - Écriture en direct : W allumé, en lecture, tourner un réglage du plugin l'écrit. Ça marche avec les plugins VST3/AU comme avec les plugins intégrés.
+  - Effacer l'automation d'un paramètre, ou de toute la piste, depuis le même menu.
+
 ## v0.8 — « VariVox »
 
 - **VariVox intégré**, comme VariAudio dans Cubase : double-clic sur un clip audio (ou clic droit › « Corriger la justesse (VariVox)… ») ouvre la zone basse VariVox.

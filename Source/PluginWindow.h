@@ -26,6 +26,13 @@ inline Array<te::Plugin*> getInsertPlugins (te::Track& t)
 
 inline String insertLetter (int index)  { return String::charToString ((juce_wchar) ('a' + jlimit (0, 9, index))); }
 
+} // namespace chen
+
+#include "Automation.h"
+
+namespace chen
+{
+
 //==============================================================================
 struct ExternalEditorContent : public te::Plugin::EditorComponent
 {
@@ -129,6 +136,8 @@ private:
             slider.valueFromTextFunction = [this] (const String& t) { return (double) param.stringToValue (t); };
             slider.updateText();
             slider.onValueChange = [this] { param.setParameter ((float) slider.getValue(), sendNotification); };
+            slider.onDragStart = [this] { param.parameterChangeGestureBegin(); };   // pour l'écriture d'automation (W)
+            slider.onDragEnd = [this] { param.parameterChangeGestureEnd(); };
             slider.setColour (Slider::textBoxTextColourId, Col::accent);
             slider.setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
             label.setText (param.getParameterName().toUpperCase(), dontSendNotification);
@@ -198,8 +207,15 @@ public:
             compareBtn.setEnabled (false);
         }
 
-        autoBtn.setTooltip (String::fromUTF8 ("Automation des paramètres (prochaine version)"));
-        autoBtn.setEnabled (false);
+        autoBtn.setTooltip (String::fromUTF8 ("Automation : choisis un paramètre de ce plugin (ou le dernier touché) pour afficher sa courbe sur la piste. "
+                                              "En lecture avec W allumé, bouger un réglage l'écrit."));
+        autoBtn.setColour (TextButton::buttonOnColourId, Col::accent.withAlpha (0.85f));
+        autoBtn.setColour (TextButton::textColourOnId, Colour (0xff15100a));
+        autoBtn.onClick = [this]
+        {
+            if (auto* t = dynamic_cast<te::AudioTrack*> (plugin.getOwnerTrack()))
+                Automation::showMenu (*t, {}, touch.getLastTouched());
+        };
         startTimerHz (4);
     }
 
@@ -269,6 +285,7 @@ private:
                compareBtn { "COMPARER" }, bypassBtn { "BYPASS" }, autoBtn { "AUTO" };
     ComboBox presetBox;
     MemoryBlock stateA, stateB;
+    Automation::TouchTracker touch { plugin };
 
     AudioPluginInstance* getInstance() const
     {
@@ -290,6 +307,9 @@ private:
     void timerCallback() override
     {
         bypassBtn.setToggleState (! plugin.isEnabled(), dontSendNotification);
+        bool automated = false;
+        for (auto* ap : plugin.getAutomatableParameters()) automated = automated || ap->hasAutomationPoints();
+        autoBtn.setToggleState (automated, dontSendNotification);   // allumé : ce plugin a de l'automation
         repaint();
     }
 };
