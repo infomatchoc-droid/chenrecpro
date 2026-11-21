@@ -5,6 +5,19 @@ Il reprend le meilleur de Cubase, Pro Tools, Logic et Ableton Live, et il est co
 
 Usage interne au studio pour l'instant.
 
+## v0.6 — « Session »
+
+- **Vue Session façon Ableton Live** (Tab) : une colonne par piste, une ligne par scène.
+  - un clic sur un clip le lance, une case vide arrête la piste ;
+  - scènes à lancer en un clic, renommables par clic droit, et bouton « + Scène » ;
+  - quantification du lancement : immédiat, 1/16 à 8 mesures (1 mesure par défaut) ;
+  - « Tout arrêter » et « Retour à l'arrangement » ;
+  - **warp** : un fichier audio glissé dans une case est calé au tempo et bouclé ;
+  - double-clic dans une case vide d'une piste instrument : nouveau clip MIDI de 4 mesures, ouvert dans l'éditeur clavier.
+- **Échap** ferme la fenêtre de plugin active.
+- **Inspecteur** : la tranche défile sur les petits écrans, avec un fader de taille normale.
+- Le transport ne passe plus sous les modes d'édition sur les petits écrans.
+
 ## v0.5 — « Comping »
 
 - **Couloirs de prises** : le bouton ≡ dans l'en-tête de piste (ou le menu playlist) affiche les autres playlists sous la piste.
@@ -92,6 +105,7 @@ Usage interne au studio pour l'instant.
 | Ctrl+Maj+T | Nouvelle piste instrument |
 | Maj+R | MIDI rétrospectif |
 | Q (éditeur) | Quantifier à la double-croche |
+| Tab | Basculer Édition / Session |
 | A | Afficher l'automation du volume |
 | W | Écriture d'automation |
 | Ctrl+molette | Zoom horizontal |

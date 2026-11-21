@@ -21,6 +21,7 @@ using namespace juce;
 #include "EditView.h"
 #include "Inspector.h"
 #include "PianoRoll.h"
+#include "SessionView.h"
 
 namespace chen
 {
@@ -46,6 +47,7 @@ public:
     {
         consoleWindow = nullptr;
         if (edit != nullptr) save();
+        session = nullptr;
         pianoRoll = nullptr;
         inspector = nullptr;
         arrange = nullptr;
@@ -76,7 +78,7 @@ public:
         g.drawText (s, sb.reduced (10, 0), Justification::centredLeft);
 
         g.setColour (Col::accent);
-        g.drawText (String::fromUTF8 ("F3 · Console     Espace · Lecture     R · Enregistrer     B · Séparer     Ctrl+D · Dupliquer     Maj+R · MIDI rétro     A · Automation     W · Écriture"),
+        g.drawText (String::fromUTF8 ("F3 · Console     Espace · Lecture     R · Enregistrer     B · Séparer     Ctrl+D · Dupliquer     Maj+R · MIDI rétro     Tab · Session     A · Automation     W · Écriture"),
                     sb.reduced (10, 0), Justification::centred);
 
         g.setColour (saved ? Col::meterMid : Col::text2);
@@ -91,7 +93,8 @@ public:
         if (transportBar) transportBar->setBounds (r.removeFromTop (58));
         if (pianoRoll && pianoRoll->isVisible()) pianoRoll->setBounds (r.removeFromBottom (jmin (380, r.getHeight() / 2)));
         if (inspector) { inspector->setVisible (showInspector); if (showInspector) inspector->setBounds (r.removeFromLeft (Inspector::width)); }
-        if (arrange) arrange->setBounds (r);
+        if (arrange) { arrange->setVisible (! showSession); arrange->setBounds (r); }
+        if (session) { session->setVisible (showSession); session->setBounds (r); }
     }
 
     /** Fichiers passés au lancement ou glissés sur l'icône : projet ou audio. */
@@ -128,6 +131,7 @@ public:
         auto code = k.getKeyCode();
 
         if (code == KeyPress::F3Key)                    { toggleConsole(); return true; }
+        if (code == KeyPress::tabKey)                   { showSession = ! showSession; resized(); return true; }
         if (code == KeyPress::spaceKey)                 { EngineHelpers::togglePlay (*edit); return true; }
         if (! cmd && k.getModifiers().isShiftDown() && (code == 'R' || code == 'r' || code == KeyPress::numberPadMultiply))
         {
@@ -212,6 +216,7 @@ public:
                 m.addItem (50, String::fromUTF8 ("Gestionnaire de plugins…"));
                 break;
             case 6:
+                m.addItem (64, String::fromUTF8 ("Vue Session (Ableton)\tTab"), true, showSession);
                 m.addItem (60, String::fromUTF8 ("Console\tF3"), true, consoleWindow != nullptr);
                 m.addItem (61, String::fromUTF8 ("Zoom pour tout voir\tF"));
                 m.addItem (62, "Inspecteur\tI", true, showInspector);
@@ -254,6 +259,7 @@ public:
             case 44: edit->clickTrackEnabled = ! edit->clickTrackEnabled.get(); break;
             case 50: showPluginManager (engine); break;
             case 60: toggleConsole(); break;
+            case 64: showSession = ! showSession; resized(); break;
             case 61: arrange->zoomToFit(); break;
             case 62: showInspector = ! showInspector; resized(); break;
             case 63: arrange->toggleAutomationView(); break;
@@ -272,6 +278,8 @@ private:
     std::unique_ptr<ArrangeView> arrange;
     std::unique_ptr<Inspector> inspector;
     std::unique_ptr<PianoRoll> pianoRoll;
+    std::unique_ptr<SessionView> session;
+    bool showSession = false;
     Component menuAnchor;
     bool showInspector = true;
     std::unique_ptr<ConsoleWindow> consoleWindow;
@@ -297,6 +305,7 @@ private:
     {
         consoleWindow = nullptr;
         if (edit != nullptr) save();
+        session = nullptr;
         pianoRoll = nullptr;
         inspector = nullptr;
         arrange = nullptr;
@@ -332,6 +341,10 @@ private:
         addChildComponent (*pianoRoll);
         pianoRoll->onClose = [this] { pianoRoll->setVisible (false); pianoRoll->setClip (nullptr); resized(); arrange->grabKeyboardFocus(); };
         arrange->onOpenMidiEditor = [this] (te::MidiClip* c) { openMidiEditor (c); };
+        session = std::make_unique<SessionView> (*edit);
+        addChildComponent (*session);
+        session->onOpenMidiEditor = [this] (te::MidiClip* c) { openMidiEditor (c); };
+        session->onSelectTrack = [this] (te::AudioTrack* t) { arrange->selectTrack (t); };
         EngineHelpers::enableMidiInputs (*edit);
         addAndMakeVisible (*transportBar);
         addAndMakeVisible (*arrange);

@@ -368,6 +368,12 @@ public:
 
     void closeButtonPressed() override { plugin.windowState->closeWindowExplicitly(); }
 
+    bool keyPressed (const KeyPress& k) override
+    {
+        if (k == KeyPress::escapeKey) { closeButtonPressed(); return true; }   // Échap : fermer
+        return DocumentWindow::keyPressed (k);
+    }
+
     void moved() override
     {
         plugin.windowState->lastWindowBounds = getBounds();

@@ -172,7 +172,7 @@ private:
 
     Rectangle<int> modesRect() const          { return { 256, (getHeight() - 34) / 2, 260, 34 }; }
     Rectangle<int> modeRect (int i) const     { auto r = modesRect().reduced (3); return r.withWidth (r.getWidth() / 4).translated (i * r.getWidth() / 4, 0); }
-    Rectangle<int> transportRect() const      { return { getWidth() / 2 - 420, (getHeight() - 34) / 2, numTransportButtons * 34 + 6, 34 }; }
+    Rectangle<int> transportRect() const      { return { jmax (modesRect().getRight() + 12, getWidth() / 2 - 420), (getHeight() - 34) / 2, numTransportButtons * 34 + 6, 34 }; }
     Rectangle<int> transportButtonRect (int i) const { auto r = transportRect(); return { r.getX() + 3 + i * 34, r.getY() + 3, 32, 28 }; }
     Rectangle<int> lcdRect() const            { return { transportRect().getRight() + 12, (getHeight() - 46) / 2, 520, 46 }; }
     Rectangle<int> cpuRect() const            { return { getWidth() - 170, (getHeight() - 20) / 2, 156, 20 }; }

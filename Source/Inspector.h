@@ -26,6 +26,9 @@ public:
             arrange.repaint();
         };
         addChildComponent (playlistAnchor);
+        addAndMakeVisible (stripScroller);
+        stripScroller.setScrollBarsShown (true, false);
+        stripScroller.setScrollBarThickness (8);
         startTimerHz (8);
     }
 
@@ -37,11 +40,12 @@ public:
         if (t != track.get())
         {
             track = t;
+            stripScroller.setViewedComponent (nullptr, false);
             strip = nullptr;
             if (t != nullptr)
             {
                 strip = std::make_unique<ChannelStrip> (*t, te::getAudioTracks (edit).indexOf (t) + 1);
-                addAndMakeVisible (*strip);
+                stripScroller.setViewedComponent (strip.get(), false);
             }
         }
 
@@ -140,7 +144,10 @@ public:
         auto gainY = 34 + 3 * 22 + 4 + 24 + clipRows * 22;
         clipGain.setBounds (70, gainY, getWidth() - 76, 20);
         auto stripTop = gainY + (arrange.getSelectedClip() ? 28 : 26);
-        if (strip) strip->setBounds (0, stripTop, getWidth() - 1, jmax (520, getHeight() - stripTop));
+        stripScroller.setBounds (0, stripTop, getWidth() - 1, getHeight() - stripTop);
+        // hauteur confortable pour le fader, quelle que soit la taille de l'écran
+        if (strip) strip->setSize (stripScroller.getWidth() - (getHeight() - stripTop < stripMinH ? 8 : 0),
+                                   jmax (stripMinH, getHeight() - stripTop));
     }
 
     void mouseDown (const MouseEvent& e) override
@@ -156,6 +163,8 @@ private:
     ArrangeView& arrange;
     te::Track::Ptr track;
     std::unique_ptr<ChannelStrip> strip;
+    Viewport stripScroller;
+    static constexpr int stripMinH = 820;
     Slider clipGain;
     Component playlistAnchor;
 
@@ -163,6 +172,7 @@ private:
     {
         if (track != nullptr && ! te::getAudioTracks (edit).contains (dynamic_cast<te::AudioTrack*> (track.get())))
         {
+            stripScroller.setViewedComponent (nullptr, false);
             strip = nullptr;
             track = nullptr;
         }

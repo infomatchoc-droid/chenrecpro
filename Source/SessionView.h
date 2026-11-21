@@ -1,0 +1,446 @@
+#pragma once
+
+// =============================================================================
+//  Vue Session, façon Ableton Live :
+//  une colonne par piste, une ligne par scène, des clips à lancer,
+//  lancement calé sur la mesure, warp des clips audio.
+// =============================================================================
+
+namespace chen
+{
+
+namespace Launcher
+{
+    inline String quantName (te::LaunchQType t)
+    {
+        using Q = te::LaunchQType;
+        switch (t)
+        {
+            case Q::none:      return String::fromUTF8 ("immédiat");
+            case Q::eightBars: return "8 mesures";
+            case Q::fourBars:  return "4 mesures";
+            case Q::twoBars:   return "2 mesures";
+            case Q::bar:       return "1 mesure";
+            case Q::half:      return "1/2";
+            case Q::quarter:   return "1/4";
+            case Q::eighth:    return "1/8";
+            case Q::sixteenth: return "1/16";
+            default:           return te::getName (t);
+        }
+    }
+
+    inline te::MonotonicBeat launchPosition (te::Edit& e)
+    {
+        auto epc = e.getTransport().getCurrentPlaybackContext();
+        if (epc == nullptr) return {};
+        auto sp = epc->getSyncPoint();
+        if (! sp) return {};
+
+        auto& lq = e.getLaunchQuantisation();
+        auto pos = sp->beat;
+        auto q = pos;
+        for (int guard = 0; guard < 64; ++guard)
+        {
+            q = lq.getNext (q);
+            if (q >= te::BeatPosition()) break;
+            q = q + te::BeatDuration::fromBeats (0.001);
+        }
+        return { sp->monotonicBeat.v + (q - pos) };
+    }
+
+    inline void ensureGrid (te::Edit& e, int scenes)
+    {
+        e.getSceneList().ensureNumberOfScenes (scenes);
+        for (auto* t : te::getAudioTracks (e))
+            t->getClipSlotList().ensureNumberOfSlots (e.getSceneList().getNumScenes());
+    }
+
+    inline bool isActive (te::Clip& c)
+    {
+        if (auto lh = c.getLaunchHandle())
+            return lh->getPlayingStatus() == te::LaunchHandle::PlayState::playing
+                || lh->getQueuedStatus() == te::LaunchHandle::QueueState::playQueued;
+        return false;
+    }
+
+    inline void startTransportIfNeeded (te::Edit& e)
+    {
+        auto& tc = e.getTransport();
+        if (tc.isPlaying()) return;
+        auto bb = e.tempoSequence.toBarsAndBeats (tc.getPosition());
+        tc.setPosition (e.tempoSequence.toTime (te::tempo::BarsAndBeats { bb.bars, {} }));
+        if (auto epc = tc.getCurrentPlaybackContext()) epc->blockUntilSyncPointChange();
+        tc.play (false);
+    }
+
+    /** Lance un clip ; les autres clips de la piste s'arrêtent au même moment. */
+    inline void launch (te::Clip& c)
+    {
+        auto& e = c.edit;
+        bool wasPlaying = e.getTransport().isPlaying();
+        startTransportIfNeeded (e);
+        auto when = wasPlaying ? std::optional (launchPosition (e)) : std::nullopt;
+
+        if (auto* at = dynamic_cast<te::AudioTrack*> (c.getTrack()))
+            for (auto* slot : at->getClipSlotList().getClipSlots())
+                if (auto* other = slot->getClip(); other != nullptr && other != &c)
+                    if (auto lh = other->getLaunchHandle())
+                        lh->stop (when);
+
+        if (auto lh = c.getLaunchHandle())
+            lh->play (when);
+    }
+
+    inline void stopTrack (te::AudioTrack& t)
+    {
+        auto& e = t.edit;
+        auto when = e.getTransport().isPlaying() ? std::optional (launchPosition (e)) : std::nullopt;
+        for (auto* slot : t.getClipSlotList().getClipSlots())
+            if (auto* c = slot->getClip())
+                if (auto lh = c->getLaunchHandle())
+                    lh->stop (when);
+    }
+
+    inline void launchScene (te::Edit& e, int scene)
+    {
+        startTransportIfNeeded (e);
+        for (auto* t : te::getAudioTracks (e))
+        {
+            auto slots = t->getClipSlotList().getClipSlots();
+            if (scene < slots.size())
+            {
+                if (auto* c = slots[scene]->getClip()) launch (*c);
+                else                                   stopTrack (*t);
+            }
+        }
+    }
+
+    inline void stopAll (te::Edit& e)
+    {
+        for (auto* t : te::getAudioTracks (e)) stopTrack (*t);
+    }
+
+    /** Retour à l'arrangement (comme le bouton d'Ableton). */
+    inline void backToArrangement (te::Edit& e)
+    {
+        stopAll (e);
+        for (auto* t : te::getAudioTracks (e)) t->playSlotClips = false;
+    }
+}
+
+//==============================================================================
+class SessionView : public Component,
+                    public FileDragAndDropTarget,
+                    private Timer
+{
+public:
+    explicit SessionView (te::Edit& e) : edit (e)
+    {
+        Launcher::ensureGrid (edit, 8);
+        startTimerHz (20);
+    }
+
+    std::function<void (te::MidiClip*)> onOpenMidiEditor;
+    std::function<void (te::AudioTrack*)> onSelectTrack;
+
+    void paint (Graphics& g) override
+    {
+        g.fillAll (Col::bg);
+        auto tracks = te::getAudioTracks (edit);
+        auto scenes = edit.getSceneList().getScenes();
+        Launcher::ensureGrid (edit, jmax (8, scenes.size()));
+
+        // en-têtes de colonnes
+        for (int i = 0; i < tracks.size(); ++i)
+        {
+            auto* t = tracks[i];
+            auto r = headerRect (i).toFloat();
+            g.setColour (t->getColour());
+            g.fillRoundedRectangle (r, 3.0f);
+            g.setColour (Colour (0xff141414));
+            g.setFont (uiFont (12.5f, true));
+            g.drawText (t->getName(), r.reduced (6, 0), Justification::centredLeft, true);
+        }
+
+        // cases
+        for (int ti = 0; ti < tracks.size(); ++ti)
+        {
+            auto slots = tracks[ti]->getClipSlotList().getClipSlots();
+            for (int si = 0; si < scenes.size(); ++si)
+            {
+                auto r = cellRect (ti, si).toFloat();
+                auto* c = si < slots.size() ? slots[si]->getClip() : nullptr;
+                if (c == nullptr)
+                {
+                    g.setColour (Colour (0xff1d1e22));
+                    g.fillRoundedRectangle (r, 3.0f);
+                    g.setColour (Colour (0xff35373d));
+                    g.fillRect (r.getX() + 8, r.getCentreY() - 3, 6.0f, 6.0f);   // ■ arrêt
+                    continue;
+                }
+
+                auto col = tracks[ti]->getColour();
+                auto lh = c->getLaunchHandle();
+                bool playing = lh && lh->getPlayingStatus() == te::LaunchHandle::PlayState::playing;
+                bool queued  = lh && lh->getQueuedStatus() == te::LaunchHandle::QueueState::playQueued;
+                bool blink   = (Time::getMillisecondCounter() / 250) % 2 == 0;
+
+                g.setColour (queued && blink ? col.brighter (0.4f) : col);
+                g.fillRoundedRectangle (r, 3.0f);
+                if (playing)
+                {
+                    g.setColour (Colours::white);
+                    g.drawRoundedRectangle (r, 3.0f, 2.0f);
+                }
+
+                Path tri;
+                tri.addTriangle (r.getX() + 8, r.getCentreY() - 6, r.getX() + 8, r.getCentreY() + 6, r.getX() + 17, r.getCentreY());
+                g.setColour (Colour (0xff141414));
+                g.fillPath (tri);
+                g.setFont (uiFont (12.0f, true));
+                g.drawText (c->getName(), r.withTrimmedLeft (22).reduced (4, 0), Justification::centredLeft, true);
+
+                // progression de lecture
+                if (playing)
+                    if (auto played = lh->getPlayedRange())
+                    {
+                        auto len = jmax (0.001, clipBeats (*c).inBeats());
+                        auto prog = std::fmod (played->getLength().inBeats(), len) / len;
+                        g.setColour (Colours::black.withAlpha (0.35f));
+                        g.fillRect (r.getX() + 4, r.getBottom() - 6, (r.getWidth() - 8), 3.0f);
+                        g.setColour (Colour (0xff141414));
+                        g.fillRect (r.getX() + 4, r.getBottom() - 6, (float) ((r.getWidth() - 8) * prog), 3.0f);
+                    }
+            }
+
+            // bouton stop de la piste
+            auto sr = stopRect (ti).toFloat();
+            g.setColour (Colour (0xff1b1e23));
+            g.fillRoundedRectangle (sr, 3.0f);
+            g.setColour (Col::text2);
+            g.fillRect (sr.getCentreX() - 4, sr.getCentreY() - 4, 8.0f, 8.0f);
+        }
+
+        // colonne des scènes
+        auto sc = scenesColumn().toFloat();
+        g.setColour (Col::panel1);
+        g.fillRect (sc);
+        g.setColour (Col::text2);
+        g.setFont (uiFont (11.0f, true));
+        g.drawText (String::fromUTF8 ("SCÈNES"), headerRect (tracks.size()).withX ((int) sc.getX() + 10), Justification::centredLeft);
+        for (int si = 0; si < scenes.size(); ++si)
+        {
+            auto r = sceneRect (si).toFloat();
+            g.setColour (Col::panel3);
+            g.fillRoundedRectangle (r, 3.0f);
+            Path tri;
+            tri.addTriangle (r.getX() + 8, r.getCentreY() - 6, r.getX() + 8, r.getCentreY() + 6, r.getX() + 17, r.getCentreY());
+            g.setColour (Col::accent);
+            g.fillPath (tri);
+            g.setColour (Col::text);
+            g.setFont (uiFont (12.5f, true));
+            auto name = scenes[si]->name.get();
+            g.drawText (name.isNotEmpty() ? name : String::fromUTF8 ("Scène ") + String (si + 1), r.withTrimmedLeft (24), Justification::centredLeft, true);
+        }
+
+        auto drawButton = [&] (Rectangle<int> r, const String& txt, Colour c)
+        {
+            g.setColour (Col::panel3);
+            g.fillRoundedRectangle (r.toFloat(), 3.0f);
+            g.setColour (c);
+            g.setFont (uiFont (11.5f, true));
+            g.drawText (txt, r, Justification::centred);
+        };
+        drawButton (stopAllRect(), String::fromUTF8 ("■  Tout arrêter"), Col::text);
+        drawButton (addSceneRect(), String::fromUTF8 ("+  Scène"), Col::text2);
+        drawButton (backRect(), String::fromUTF8 ("↺  Retour à l'arrangement"), Col::accent);
+        drawButton (quantRect(), "Lancement : " + Launcher::quantName (edit.getLaunchQuantisation().type.get()), Col::text);
+
+        if (tracks.isEmpty())
+        {
+            g.setColour (Col::text3);
+            g.setFont (uiFont (15.0f));
+            g.drawText (String::fromUTF8 ("Crée des pistes pour remplir la Session"), getLocalBounds(), Justification::centred);
+        }
+
+        g.setColour (Col::text3);
+        g.setFont (uiFont (11.0f));
+        g.drawText (String::fromUTF8 ("Clic : lancer  ·  case vide : arrêter la piste  ·  double-clic sur une piste instrument : nouveau clip MIDI  ·  glisser un fichier audio : clip calé au tempo  ·  clic droit : options  ·  Tab : Édition"),
+                    10, getHeight() - 24, getWidth() - 20, 20, Justification::centredLeft);
+    }
+
+    void mouseDown (const MouseEvent& e) override
+    {
+        auto p = e.getPosition();
+        auto tracks = te::getAudioTracks (edit);
+        auto scenes = edit.getSceneList().getScenes();
+
+        if (stopAllRect().contains (p))  { Launcher::stopAll (edit); return; }
+        if (backRect().contains (p))     { Launcher::backToArrangement (edit); return; }
+        if (addSceneRect().contains (p)) { Launcher::ensureGrid (edit, scenes.size() + 1); repaint(); return; }
+        if (quantRect().contains (p))    { showQuantMenu(); return; }
+
+        for (int si = 0; si < scenes.size(); ++si)
+            if (sceneRect (si).contains (p))
+            {
+                if (e.mods.isPopupMenu()) renameScene (*scenes[si]);
+                else                      Launcher::launchScene (edit, si);
+                return;
+            }
+
+        for (int ti = 0; ti < tracks.size(); ++ti)
+        {
+            if (stopRect (ti).contains (p)) { Launcher::stopTrack (*tracks[ti]); return; }
+            if (headerRect (ti).contains (p)) { if (onSelectTrack) onSelectTrack (tracks[ti]); return; }
+
+            auto slots = tracks[ti]->getClipSlotList().getClipSlots();
+            for (int si = 0; si < scenes.size() && si < slots.size(); ++si)
+            {
+                if (! cellRect (ti, si).contains (p)) continue;
+                if (onSelectTrack) onSelectTrack (tracks[ti]);
+                auto* c = slots[si]->getClip();
+
+                if (c != nullptr && e.mods.isPopupMenu()) { showClipMenu (*c); return; }
+                if (c != nullptr)                         { Launcher::launch (*c); return; }
+                if (e.getNumberOfClicks() < 2)            { Launcher::stopTrack (*tracks[ti]); return; }
+
+                // double-clic dans une case vide d'une piste instrument : nouveau clip MIDI de 4 mesures
+                if (EngineHelpers::isInstrumentTrack (*tracks[ti]))
+                {
+                    auto len = edit.tempoSequence.toTime (te::BeatPosition::fromBeats (16.0));
+                    if (auto mc = te::insertMIDIClip (*slots[si], "MIDI", { te::TimePosition(), len }))
+                        if (onOpenMidiEditor) onOpenMidiEditor (mc.get());
+                }
+                return;
+            }
+        }
+    }
+
+
+    bool isInterestedInFileDrag (const StringArray& files) override
+    {
+        for (auto& f : files)
+            if (edit.engine.getAudioFileFormatManager().readFormatManager.findFormatForFileExtension (File (f).getFileExtension()) != nullptr)
+                return true;
+        return false;
+    }
+
+    void filesDropped (const StringArray& files, int x, int y) override
+    {
+        auto tracks = te::getAudioTracks (edit);
+        auto scenes = edit.getSceneList().getScenes();
+        for (int ti = 0; ti < tracks.size(); ++ti)
+            for (int si = 0; si < scenes.size(); ++si)
+                if (cellRect (ti, si).contains (x, y))
+                {
+                    auto slots = tracks[ti]->getClipSlotList().getClipSlots();
+                    int s = si;
+                    for (auto& f : files)
+                    {
+                        if (s >= slots.size()) break;
+                        addAudioToSlot (*slots[s++], File (f));
+                    }
+                    repaint();
+                    return;
+                }
+    }
+
+    /** Clip audio calé au tempo (warp) et bouclé, comme dans Ableton. */
+    void addAudioToSlot (te::ClipSlot& slot, const File& f)
+    {
+        te::AudioFile af (edit.engine, f);
+        if (! af.isValid()) return;
+        if (auto* old = slot.getClip()) old->removeFromParent();
+
+        auto len = te::TimeDuration::fromSeconds (af.getLength());
+        if (auto wc = te::insertWaveClip (slot, f.getFileNameWithoutExtension(), f, { { te::TimePosition(), len }, {} }, te::DeleteExistingClips::yes))
+        {
+            wc->setAutoTempo (true);
+            wc->setUsesProxy (false);
+            auto beats = clipBeats (*wc);
+            if (beats > te::BeatDuration())
+                wc->setLoopRangeBeats ({ te::BeatPosition(), te::BeatPosition() + beats });
+        }
+    }
+
+private:
+    te::Edit& edit;
+
+    te::BeatDuration clipBeats (te::Clip& c) const
+    {
+        auto pos = c.getPosition();
+        return edit.tempoSequence.toBeats (pos.getEnd()) - edit.tempoSequence.toBeats (pos.getStart());
+    }
+
+    static constexpr int colW = 150, cellH = 38, headerH = 30, gap = 4, scenesW = 210, top = 52;
+
+    Rectangle<int> headerRect (int ti) const        { return { 10 + ti * (colW + gap), top, colW, headerH }; }
+    Rectangle<int> cellRect (int ti, int si) const  { return { 10 + ti * (colW + gap), top + headerH + gap + si * (cellH + gap), colW, cellH }; }
+    Rectangle<int> stopRect (int ti) const          { return cellRect (ti, edit.getSceneList().getNumScenes()).withHeight (26); }
+    Rectangle<int> scenesColumn() const             { return { getWidth() - scenesW, 0, scenesW, getHeight() - 28 }; }
+    Rectangle<int> sceneRect (int si) const         { auto c = cellRect (0, si); return { getWidth() - scenesW + 10, c.getY(), scenesW - 20, cellH }; }
+    Rectangle<int> stopAllRect() const              { auto r = sceneRect (edit.getSceneList().getNumScenes()); return r.withHeight (26); }
+    Rectangle<int> addSceneRect() const             { return stopAllRect().translated (0, 32); }
+    Rectangle<int> backRect() const                 { return { 10, 12, 230, 28 }; }
+    Rectangle<int> quantRect() const                { return { 250, 12, 200, 28 }; }
+
+    void timerCallback() override { repaint(); }
+
+    void showQuantMenu()
+    {
+        PopupMenu m;
+        m.addSectionHeader ("QUANTIFICATION DU LANCEMENT");
+        using Q = te::LaunchQType;
+        const Q types[] = { Q::none, Q::eightBars, Q::fourBars, Q::twoBars, Q::bar, Q::half, Q::quarter, Q::eighth, Q::sixteenth };
+        for (int i = 0; i < (int) std::size (types); ++i)
+            m.addItem (i + 1, Launcher::quantName (types[i]), true, edit.getLaunchQuantisation().type.get() == types[i]);
+        m.showMenuAsync (PopupMenu::Options(), [this, types] (int r)
+        {
+            if (r > 0) edit.getLaunchQuantisation().type = types[r - 1];
+        });
+    }
+
+    void showClipMenu (te::Clip& c)
+    {
+        PopupMenu m;
+        m.addItem (1, "Lancer");
+        m.addItem (2, "Renommer…");
+        if (dynamic_cast<te::MidiClip*> (&c) != nullptr) m.addItem (3, String::fromUTF8 ("Ouvrir dans l'éditeur clavier"));
+        m.addSeparator();
+        m.addItem (4, "Supprimer");
+        te::Clip::Ptr keep (&c);
+        m.showMenuAsync (PopupMenu::Options(), [this, keep] (int r)
+        {
+            if (keep == nullptr) return;
+            if (r == 1) Launcher::launch (*keep);
+            if (r == 3) if (auto* mc = dynamic_cast<te::MidiClip*> (keep.get())) if (onOpenMidiEditor) onOpenMidiEditor (mc);
+            if (r == 4) keep->removeFromParent();
+            if (r == 2)
+            {
+                auto* aw = new AlertWindow ("Renommer le clip", {}, MessageBoxIconType::NoIcon);
+                aw->addTextEditor ("name", keep->getName());
+                aw->addButton ("OK", 1, KeyPress (KeyPress::returnKey));
+                aw->addButton ("Annuler", 0, KeyPress (KeyPress::escapeKey));
+                aw->enterModalState (true, ModalCallbackFunction::create ([keep, aw] (int res)
+                {
+                    if (res == 1) keep->setName (aw->getTextEditorContents ("name"));
+                }), true);
+            }
+        });
+    }
+
+    void renameScene (te::Scene& s)
+    {
+        auto* aw = new AlertWindow (String::fromUTF8 ("Renommer la scène"), {}, MessageBoxIconType::NoIcon);
+        aw->addTextEditor ("name", s.name.get());
+        aw->addButton ("OK", 1, KeyPress (KeyPress::returnKey));
+        aw->addButton ("Annuler", 0, KeyPress (KeyPress::escapeKey));
+        auto* sp = &s;
+        aw->enterModalState (true, ModalCallbackFunction::create ([sp, aw] (int res)
+        {
+            if (res == 1) sp->name = aw->getTextEditorContents ("name");
+        }), true);
+    }
+};
+
+} // namespace chen
