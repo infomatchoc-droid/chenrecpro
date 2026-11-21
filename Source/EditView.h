@@ -29,20 +29,26 @@ public:
 
         auto& tr = edit.getTransport();
 
-        // marque
-        if (pistache == nullptr) pistache = createPistache();
-        if (pistache != nullptr)
-            pistache->drawWithin (g, Rectangle<float> (12, (getHeight() - 34) / 2.0f, 34, 34), RectanglePlacement::centred, 1.0f);
-        g.setFont (uiFont (17.0f, true));
-        g.setColour (Colour (0xffe6e8ec));
-        g.drawText (String::fromUTF8 ("Chèn"), 52, 8, 60, 24, Justification::centredLeft);
-        g.setColour (Col::accent);
-        g.drawText ("Rec", 94, 8, 40, 24, Justification::centredLeft);
-        g.setColour (Colour (0xffe6e8ec));
-        g.drawText ("Pro", 127, 8, 40, 24, Justification::centredLeft);
+        // marque : la tête de Pistache + ChènRecPro
+        drawPistache (g, Rectangle<float> (10, (getHeight() - 36) / 2.0f, 72, 36), 6.0f);
+        auto bx = 90;
+        {
+            auto f = uiFont (17.0f, true);
+            g.setFont (f);
+            auto x = (float) bx;
+            auto part = [&] (const String& s, Colour c)
+            {
+                g.setColour (c);
+                g.drawText (s, Rectangle<float> (x, 8, 80, 24), Justification::centredLeft);
+                x += GlyphArrangement::getStringWidth (f, s);
+            };
+            part (String::fromUTF8 ("Chèn"), Colour (0xffe6e8ec));
+            part ("Rec", Col::accent);
+            part ("Pro", Colour (0xffe6e8ec));
+        }
         g.setColour (Col::text3);
         g.setFont (uiFont (9.5f, true));
-        g.drawText (String::fromUTF8 ("STUDIO DES CHÈNEVIÈRES"), 52, 30, 160, 14, Justification::centredLeft);
+        g.drawText (String::fromUTF8 ("STUDIO DES CHÈNEVIÈRES"), bx, 30, 160, 14, Justification::centredLeft);
 
         // modes d'édition
         auto mr = modesRect();
@@ -145,7 +151,6 @@ public:
 
 private:
     te::Edit& edit;
-    std::unique_ptr<Drawable> pistache;
     static constexpr int numTransportButtons = 8;
 
     void timerCallback() override { repaint(); }
@@ -158,7 +163,7 @@ private:
         g.drawRoundedRectangle (r.toFloat(), 5.0f, 1.0f);
     }
 
-    Rectangle<int> modesRect() const          { return { 210, (getHeight() - 34) / 2, 260, 34 }; }
+    Rectangle<int> modesRect() const          { return { 256, (getHeight() - 34) / 2, 260, 34 }; }
     Rectangle<int> modeRect (int i) const     { auto r = modesRect().reduced (3); return r.withWidth (r.getWidth() / 4).translated (i * r.getWidth() / 4, 0); }
     Rectangle<int> transportRect() const      { return { getWidth() / 2 - 420, (getHeight() - 34) / 2, numTransportButtons * 34 + 6, 34 }; }
     Rectangle<int> transportButtonRect (int i) const { auto r = transportRect(); return { r.getX() + 3 + i * 34, r.getY() + 3, 32, 28 }; }
@@ -229,6 +234,7 @@ public:
         addAndMakeVisible (vScroll);
         hScroll.setAutoHide (false);
         vScroll.setAutoHide (false);
+        addChildComponent (playlistAnchor);
         hScroll.addListener (this);
         vScroll.addListener (this);
     }
@@ -314,10 +320,31 @@ public:
     }
 
     //==========================================================================
+    enum class DragMode { none, move, trimStart, trimEnd, fadeIn, fadeOut };
+
+    void mouseMove (const MouseEvent& e) override
+    {
+        auto mode = DragMode::none;
+        if (auto* t = trackAt (e.y); t != nullptr && e.x > headerW)
+            if (auto* c = clipAt (*t, xToTime (e.x)))
+                mode = hitZone (*t, *c, e.getPosition());
+
+        switch (mode)
+        {
+            case DragMode::trimStart:
+            case DragMode::trimEnd:  setMouseCursor (MouseCursor::LeftRightResizeCursor); break;
+            case DragMode::fadeIn:
+            case DragMode::fadeOut:  setMouseCursor (MouseCursor::CrosshairCursor); break;
+            case DragMode::move:     setMouseCursor (MouseCursor::DraggingHandCursor); break;
+            default:                 setMouseCursor (MouseCursor::NormalCursor); break;
+        }
+    }
+
     void mouseDown (const MouseEvent& e) override
     {
         grabKeyboardFocus();
         auto p = e.getPosition();
+        dragMode = DragMode::none;
 
         if (p.y < rulerH && p.x > headerW)
         {
@@ -327,11 +354,12 @@ public:
         }
 
         auto* t = trackAt (p.y);
-        if (t == nullptr) { selectedClip = nullptr; repaint(); return; }
+        if (t == nullptr) { selectedClip = nullptr; notifySelection(); repaint(); return; }
 
         if (p.x < headerW)
         {
             headerClick (*t, p);
+            notifySelection();
             return;
         }
 
@@ -339,13 +367,19 @@ public:
         selectedClip = clipAt (*t, xToTime (p.x));
         if (selectedClip != nullptr)
         {
-            dragStartTime = selectedClip->getPosition().getStart().inSeconds();
+            auto pos = selectedClip->getPosition();
+            orig = { pos.getStart().inSeconds(), pos.getEnd().inSeconds(), pos.getOffset().inSeconds() };
             dragMouseTime = xToTime (p.x);
+            dragMode = hitZone (*t, *selectedClip, p);
+
+            if (e.mods.isPopupMenu())
+                showClipMenu();
         }
         else
         {
             edit.getTransport().setPosition (te::TimePosition::fromSeconds (snap (xToTime (p.x))));
         }
+        notifySelection();
         repaint();
     }
 
@@ -357,16 +391,67 @@ public:
             return;
         }
 
-        if (selectedClip != nullptr && e.getDistanceFromDragStart() > 3 && transportBar.mode != TransportBar::Mode::spot)
+        if (selectedClip == nullptr || e.getDistanceFromDragStart() < 3 || dragMode == DragMode::none)
+            return;
+
+        auto now = xToTime (e.x);
+        auto snapped = [this] (double v) { return transportBar.mode == TransportBar::Mode::grid ? snap (v) : v; };
+        auto* audio = dynamic_cast<te::AudioClipBase*> (selectedClip.get());
+
+        switch (dragMode)
         {
-            auto newStart = jmax (0.0, dragStartTime + xToTime (e.x) - dragMouseTime);
-            if (transportBar.mode == TransportBar::Mode::grid) newStart = snap (newStart);
-            selectedClip->setStart (te::TimePosition::fromSeconds (newStart), false, true);
-            repaint();
+            case DragMode::move:
+            {
+                if (transportBar.mode == TransportBar::Mode::spot) break;
+                auto newStart = jmax (0.0, snapped (orig.start + now - dragMouseTime));
+                selectedClip->setStart (te::TimePosition::fromSeconds (newStart), false, true);
+
+                // déplacement vers une autre piste
+                if (auto* target = trackAt (e.y); target != nullptr && target != selectedClip->getTrack())
+                {
+                    selectedClip->moveTo (*target);
+                    selectedTrack = target;
+                }
+                break;
+            }
+            case DragMode::trimStart:
+            {
+                auto minStart = orig.start - orig.offset;           // début du fichier source
+                auto newStart = jlimit (jmax (0.0, minStart), orig.end - 0.01, snapped (now));
+                selectedClip->setStart (te::TimePosition::fromSeconds (newStart), true, false);
+                break;
+            }
+            case DragMode::trimEnd:
+            {
+                auto pos = selectedClip->getPosition();
+                auto maxEnd = pos.getStart().inSeconds() + selectedClip->getMaximumLength().inSeconds() - pos.getOffset().inSeconds();
+                auto newEnd = jlimit (pos.getStart().inSeconds() + 0.01, jmax (pos.getStart().inSeconds() + 0.01, maxEnd), snapped (now));
+                selectedClip->setEnd (te::TimePosition::fromSeconds (newEnd), true);
+                break;
+            }
+            case DragMode::fadeIn:
+                if (audio != nullptr)
+                {
+                    auto pos = audio->getPosition();
+                    auto len = jlimit (0.0, pos.getLength().inSeconds() - audio->getFadeOut().inSeconds(), now - pos.getStart().inSeconds());
+                    audio->setFadeIn (te::TimeDuration::fromSeconds (len));
+                }
+                break;
+            case DragMode::fadeOut:
+                if (audio != nullptr)
+                {
+                    auto pos = audio->getPosition();
+                    auto len = jlimit (0.0, pos.getLength().inSeconds() - audio->getFadeIn().inSeconds(), pos.getEnd().inSeconds() - now);
+                    audio->setFadeOut (te::TimeDuration::fromSeconds (len));
+                }
+                break;
+            default: break;
         }
+        notifySelection();
+        repaint();
     }
 
-    void mouseUp (const MouseEvent&) override { draggingPlayhead = false; }
+    void mouseUp (const MouseEvent&) override { draggingPlayhead = false; dragMode = DragMode::none; }
 
     void mouseDoubleClick (const MouseEvent& e) override
     {
@@ -398,15 +483,99 @@ public:
 
     bool keyPressed (const KeyPress& k) override
     {
-        if ((k == KeyPress::deleteKey || k == KeyPress::backspaceKey) && selectedClip != nullptr)
+        auto code = k.getKeyCode();
+        auto cmd = k.getModifiers().isCommandDown();
+
+        if ((code == KeyPress::deleteKey || code == KeyPress::backspaceKey) && selectedClip != nullptr)
         {
             selectedClip->removeFromParent();
             selectedClip = nullptr;
+            notifySelection();
             repaint();
+            return true;
+        }
+        if (! cmd && (code == 'B' || code == 'b'))   { splitAtPlayhead(); return true; }
+        if (cmd && (code == 'E' || code == 'e'))     { splitAtPlayhead(); return true; }   // Pro Tools : séparer
+        if (cmd && (code == 'D' || code == 'd'))     { duplicateSelected(); return true; }
+        if (cmd && k.getModifiers().isShiftDown() && (code == KeyPress::upKey || code == KeyPress::downKey))
+        {
+            nudgeClipGain (code == KeyPress::upKey ? 1.0f : -1.0f);
             return true;
         }
         return false;
     }
+
+    //==========================================================================
+    void splitAtPlayhead()
+    {
+        auto pos = edit.getTransport().getPosition();
+        te::Clip* c = selectedClip.get();
+        if (c == nullptr || ! c->getPosition().time.contains (pos))
+            c = selectedTrack ? clipAt (*selectedTrack, pos.inSeconds()) : nullptr;
+        if (c == nullptr) return;
+        if (auto* ct = dynamic_cast<te::ClipTrack*> (c->getTrack()))
+            if (auto* right = ct->splitClip (*c, pos))
+                selectedClip = right;
+        notifySelection();
+        repaint();
+    }
+
+    void duplicateSelected()
+    {
+        if (selectedClip == nullptr) return;
+        auto* ct = dynamic_cast<te::ClipTrack*> (selectedClip->getTrack());
+        if (ct == nullptr) return;
+        auto copy = selectedClip->state.createCopy();
+        edit.createNewItemID().writeID (copy, nullptr);
+        if (auto* nc = ct->insertClipWithState (copy))
+        {
+            nc->setStart (selectedClip->getPosition().getEnd(), false, true);
+            selectedClip = nc;
+        }
+        notifySelection();
+        repaint();
+    }
+
+    void nudgeClipGain (float db)
+    {
+        if (auto* a = dynamic_cast<te::AudioClipBase*> (selectedClip.get()))
+            a->setGainDB (jlimit (-48.0f, 24.0f, a->getGainDB() + db));
+        notifySelection();
+        repaint();
+    }
+
+    void showClipMenu()
+    {
+        PopupMenu m;
+        m.addItem (1, String::fromUTF8 ("Séparer au curseur\tB"));
+        m.addItem (2, "Dupliquer\tCtrl+D");
+        m.addItem (3, "Supprimer\tSuppr");
+        m.addSeparator();
+        m.addItem (4, String::fromUTF8 ("Gain de clip +1 dB\tCtrl+Maj+↑"));
+        m.addItem (5, String::fromUTF8 ("Gain de clip −1 dB\tCtrl+Maj+↓"));
+        m.addItem (6, String::fromUTF8 ("Gain de clip à 0 dB"));
+        m.addItem (7, "Retirer les fondus");
+        m.showMenuAsync (PopupMenu::Options(), [this, sp = SafePointer<ArrangeView> (this)] (int r)
+        {
+            if (sp == nullptr || selectedClip == nullptr) return;
+            if (r == 1) splitAtPlayhead();
+            if (r == 2) duplicateSelected();
+            if (r == 3) { selectedClip->removeFromParent(); selectedClip = nullptr; }
+            if (r == 4) nudgeClipGain (1.0f);
+            if (r == 5) nudgeClipGain (-1.0f);
+            if (auto* a = dynamic_cast<te::AudioClipBase*> (selectedClip.get()))
+            {
+                if (r == 6) a->setGainDB (0.0f);
+                if (r == 7) { a->setFadeIn ({}); a->setFadeOut ({}); }
+            }
+            notifySelection();
+            repaint();
+        });
+    }
+
+    std::function<void()> onSelectionChanged;
+    void openInputMenu (te::AudioTrack& t) { showInputMenu (t); }
+    te::Clip* getSelectedClip() const { return selectedClip.get(); }
 
     //==========================================================================
     bool isInterestedInFileDrag (const StringArray& files) override
@@ -464,7 +633,37 @@ private:
     ScrollBar hScroll { false }, vScroll { true };
     te::AudioTrack* selectedTrack = nullptr;
     te::Clip::Ptr selectedClip;
-    double dragStartTime = 0, dragMouseTime = 0;
+    double dragMouseTime = 0;
+    struct { double start = 0, end = 0, offset = 0; } orig;
+    DragMode dragMode = DragMode::none;
+    Component playlistAnchor;
+
+    void notifySelection() { if (onSelectionChanged) onSelectionChanged(); }
+
+    Rectangle<float> clipRect (te::Track& t, te::Clip& c) const
+    {
+        auto pos = c.getPosition();
+        auto x1 = timeToX (pos.getStart().inSeconds()), x2 = timeToX (pos.getEnd().inSeconds());
+        return { x1, (float) trackTop (t) + 2, x2 - x1, (float) trackHeight (t) - 5 };
+    }
+
+    DragMode hitZone (te::Track& t, te::Clip& c, Point<int> p) const
+    {
+        auto r = clipRect (t, c);
+        auto x = (float) p.x, y = (float) p.y;
+        bool inHeader = y < r.getY() + 16;
+        auto* a = dynamic_cast<te::AudioClipBase*> (&c);
+        if (a != nullptr && inHeader)
+        {
+            auto fin  = r.getX() + (float) (a->getFadeIn().inSeconds() * pixelsPerSecond);
+            auto fout = r.getRight() - (float) (a->getFadeOut().inSeconds() * pixelsPerSecond);
+            if (x < jmax (r.getX() + 12, fin + 6))        return DragMode::fadeIn;
+            if (x > jmin (r.getRight() - 12, fout - 6))   return DragMode::fadeOut;
+        }
+        if (! inHeader && x < r.getX() + 7)      return DragMode::trimStart;
+        if (! inHeader && x > r.getRight() - 7)  return DragMode::trimEnd;
+        return DragMode::move;
+    }
     bool draggingPlayhead = false, dropHighlight = false;
     struct ThumbEntry { File file; std::unique_ptr<te::SmartThumbnail> thumb; };
     std::map<te::EditItemID, ThumbEntry> thumbs;
@@ -646,7 +845,17 @@ private:
             if (te::isOnTargetTrack (*in, t, 0)) input = in->getInputDevice().getName();
         g.setColour (Col::text3);
         g.setFont (uiFont (11.0f));
-        g.drawText (input, r.getX() + 30, r.getY() + 27, r.getWidth() - 60, 14, Justification::centredLeft, true);
+        g.drawText (input, r.getX() + 30, r.getY() + 27, r.getWidth() - 150, 14, Justification::centredLeft, true);
+
+        // playlist
+        {
+            auto pr = Rectangle<float> ((float) r.getRight() - 112, r.getY() + 26.0f, 88, 16);
+            g.setColour (Colour (0xff131416));
+            g.fillRoundedRectangle (pr, 2);
+            g.setColour (Col::accent);
+            g.setFont (uiFont (10.5f));
+            g.drawText (String::fromUTF8 ("▾ ") + Playlists::getCurrent (t), pr.reduced (4, 0), Justification::centredLeft, true);
+        }
 
         // volume
         if (auto* v = t.getVolumePlugin())
@@ -689,6 +898,11 @@ private:
         {
             if (auto* v = t.getVolumePlugin())
                 v->setVolumeDb (faderPosToDb (jlimit (0.0f, 1.0f, (p.x - 30.0f) / (headerW - 100.0f))));
+        }
+        else if (p.y >= top + 26 && p.y <= top + 42 && p.x >= headerW - 112)
+        {
+            playlistAnchor.setBounds (headerW - 112, top + 26, 88, 16);
+            Playlists::showMenu (t, &playlistAnchor);
         }
         else if (p.y >= top + 26 && p.y <= top + 42)
         {
@@ -782,7 +996,10 @@ private:
             g.drawText (c->getName(), hdr.reduced (5, 0), Justification::centredLeft, true);
 
             if (auto* wac = dynamic_cast<te::WaveAudioClip*> (c))
+            {
                 drawWaveform (g, *wac, cr.reduced (0, 2), col);
+                drawFadesAndGain (g, *wac, Rectangle<float> (x1, (float) r.getY() + 2, x2 - x1, (float) r.getHeight() - 5), hdr, sel);
+            }
 
             g.setColour (sel ? Colours::white : col.darker (0.35f));
             g.drawRoundedRectangle (Rectangle<float> (x1, (float) r.getY() + 2, x2 - x1, (float) r.getHeight() - 5).reduced (0.5f), 3.0f, sel ? 1.5f : 1.0f);
@@ -800,10 +1017,64 @@ private:
         }
     }
 
+    void drawFadesAndGain (Graphics& g, te::AudioClipBase& c, Rectangle<float> r, Rectangle<float> hdr, bool sel)
+    {
+        auto body = r.withTrimmedTop (hdr.getHeight());
+        auto fin  = (float) (c.getFadeIn().inSeconds() * pixelsPerSecond);
+        auto fout = (float) (c.getFadeOut().inSeconds() * pixelsPerSecond);
+
+        auto drawFade = [&] (bool in, float w)
+        {
+            if (w < 1.0f) return;
+            Path shade, curve;
+            auto x0 = in ? body.getX() : body.getRight() - w;
+            auto xA = in ? x0 : x0 + w, xB = in ? x0 + w : x0;   // xA = silence, xB = plein niveau
+            shade.startNewSubPath (xA, body.getBottom());
+            for (int i = 0; i <= 24; ++i)
+            {
+                auto t = i / 24.0f;
+                auto gain = std::sin (t * MathConstants<float>::halfPi);   // courbe à puissance constante
+                auto x = xA + (xB - xA) * t;
+                auto y = body.getBottom() - body.getHeight() * gain;
+                if (i == 0) curve.startNewSubPath (x, y); else curve.lineTo (x, y);
+                shade.lineTo (x, y);
+            }
+            shade.lineTo (xB, body.getY());
+            shade.lineTo (xA, body.getY());
+            shade.closeSubPath();
+            g.setColour (Colours::black.withAlpha (0.35f));
+            g.fillPath (shade);
+            g.setColour (Colours::white.withAlpha (0.75f));
+            g.strokePath (curve, PathStrokeType (1.2f));
+        };
+        drawFade (true, fin);
+        drawFade (false, fout);
+
+        // poignées de fondu (coins hauts), visibles sur le clip sélectionné
+        if (sel)
+        {
+            g.setColour (Colours::white);
+            g.fillRect (r.getX() + fin - 3, r.getY() + 1, 6.0f, 6.0f);
+            g.fillRect (r.getRight() - fout - 3, r.getY() + 1, 6.0f, 6.0f);
+        }
+
+        // gain de clip
+        auto db = c.getGainDB();
+        if (std::abs (db) > 0.05f)
+        {
+            g.setColour (Colour (0xd90a0a0c));
+            g.setFont (uiFont (10.5f, true));
+            g.drawText (dbString (db) + " dB", hdr.reduced (5, 0), Justification::centredRight, false);
+            auto y = body.getBottom() - body.getHeight() * jlimit (0.05f, 0.95f, dbToFaderPos (db));
+            g.setColour (Colours::white.withAlpha (0.55f));
+            g.drawHorizontalLine ((int) y, body.getX(), body.getRight());
+        }
+    }
+
     void drawWaveform (Graphics& g, te::WaveAudioClip& c, Rectangle<float> area, Colour col)
     {
         auto& entry = thumbs[c.itemID];
-        te::AudioFile af (c.getPlaybackFile());
+        te::AudioFile af (c.getAudioFile());   // fichier source : stable même avec fondus et gain
         if (entry.thumb == nullptr)
             entry.thumb = std::make_unique<te::SmartThumbnail> (edit.engine, af, *this, &edit);
         else if (entry.file != af.getFile())
@@ -887,6 +1158,11 @@ private:
     void valueTreeChildAdded (ValueTree&, ValueTree&) override        { triggerAsyncUpdate(); }
     void valueTreeChildRemoved (ValueTree&, ValueTree& c, int) override
     {
+        if (selectedClip != nullptr && ! selectedClip->state.getParent().isValid())
+        {
+            selectedClip = nullptr;
+            notifySelection();
+        }
         if (te::TrackList::isTrack (c))
         {
             // les mesures sont rattachées à des plugins qui disparaissent avec la piste

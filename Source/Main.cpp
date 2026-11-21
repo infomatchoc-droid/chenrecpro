@@ -15,7 +15,9 @@ using namespace juce;
 #include "PluginWindow.h"
 #include "PluginScanner.h"
 #include "Console.h"
+#include "Playlists.h"
 #include "EditView.h"
+#include "Inspector.h"
 
 namespace chen
 {
@@ -41,6 +43,7 @@ public:
     {
         consoleWindow = nullptr;
         if (edit != nullptr) save();
+        inspector = nullptr;
         arrange = nullptr;
         transportBar = nullptr;
         edit = nullptr;
@@ -69,7 +72,7 @@ public:
         g.drawText (s, sb.reduced (10, 0), Justification::centredLeft);
 
         g.setColour (Col::accent);
-        g.drawText (String::fromUTF8 ("F3 · Console     Espace · Lecture     R · Enregistrer     Ctrl+T · Nouvelle piste"),
+        g.drawText (String::fromUTF8 ("F3 · Console     Espace · Lecture     R · Enregistrer     B · Séparer     Ctrl+D · Dupliquer     I · Inspecteur"),
                     sb.reduced (10, 0), Justification::centred);
 
         g.setColour (saved ? Col::meterMid : Col::text2);
@@ -82,6 +85,7 @@ public:
         auto r = getLocalBounds();
         r.removeFromBottom (statusH);
         if (transportBar) transportBar->setBounds (r.removeFromTop (58));
+        if (inspector) { inspector->setVisible (showInspector); if (showInspector) inspector->setBounds (r.removeFromLeft (Inspector::width)); }
         if (arrange) arrange->setBounds (r);
     }
 
@@ -124,6 +128,7 @@ public:
         if (! cmd && (code == 'L' || code == 'l'))     { edit->getTransport().looping = ! edit->getTransport().looping.get(); return true; }
         if (! cmd && (code == 'C' || code == 'c'))     { edit->clickTrackEnabled = ! edit->clickTrackEnabled.get(); return true; }
         if (! cmd && (code == 'F' || code == 'f'))     { arrange->zoomToFit(); return true; }
+        if (! cmd && (code == 'I' || code == 'i'))     { showInspector = ! showInspector; resized(); return true; }
         return false;
     }
 
@@ -175,6 +180,7 @@ public:
             case 6:
                 m.addItem (60, String::fromUTF8 ("Console\tF3"), true, consoleWindow != nullptr);
                 m.addItem (61, String::fromUTF8 ("Zoom pour tout voir\tF"));
+                m.addItem (62, "Inspecteur\tI", true, showInspector);
                 break;
             case 7:
                 m.addItem (70, String::fromUTF8 ("À propos de ChènRecPro"));
@@ -211,6 +217,7 @@ public:
             case 50: showPluginManager (engine); break;
             case 60: toggleConsole(); break;
             case 61: arrange->zoomToFit(); break;
+            case 62: showInspector = ! showInspector; resized(); break;
             case 70: showAbout(); break;
             default: break;
         }
@@ -222,6 +229,8 @@ private:
     File editFile;
     std::unique_ptr<TransportBar> transportBar;
     std::unique_ptr<ArrangeView> arrange;
+    std::unique_ptr<Inspector> inspector;
+    bool showInspector = true;
     std::unique_ptr<ConsoleWindow> consoleWindow;
     bool saved = true;
     static constexpr int statusH = 24;
@@ -245,6 +254,7 @@ private:
     {
         consoleWindow = nullptr;
         if (edit != nullptr) save();
+        inspector = nullptr;
         arrange = nullptr;
         transportBar = nullptr;
 
@@ -270,8 +280,11 @@ private:
 
         transportBar = std::make_unique<TransportBar> (*edit);
         arrange = std::make_unique<ArrangeView> (*edit, *transportBar);
+        inspector = std::make_unique<Inspector> (*edit, *arrange);
+        arrange->onSelectionChanged = [this] { if (inspector) inspector->refresh(); };
         addAndMakeVisible (*transportBar);
         addAndMakeVisible (*arrange);
+        addAndMakeVisible (*inspector);
 
         engine.getPropertyStorage().getPropertiesFile().setValue ("chenLastProject", f.getFullPathName());
         if (isNew) save();

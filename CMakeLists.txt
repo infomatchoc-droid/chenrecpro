@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(ChenRecPro VERSION 0.1.2 LANGUAGES C CXX)
+project(ChenRecPro VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,6 +29,8 @@ juce_add_gui_app(ChenRecPro
     NEEDS_CURL FALSE
     NEEDS_WEB_BROWSER FALSE)
 
+juce_add_binary_data(ChenRecProData SOURCES Resources/pistache.png)
+set_target_properties(ChenRecProData PROPERTIES POSITION_INDEPENDENT_CODE ON)
 juce_generate_juce_header(ChenRecPro)
 target_sources(ChenRecPro PRIVATE Source/Main.cpp)
 
@@ -46,6 +48,7 @@ target_compile_definitions(ChenRecPro PRIVATE
     TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
 
 target_link_libraries(ChenRecPro PRIVATE
+    ChenRecProData
     tracktion::tracktion_core
     tracktion::tracktion_engine
     tracktion::tracktion_graph

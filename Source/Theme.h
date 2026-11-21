@@ -49,19 +49,26 @@ inline Font monoFont (float h)
     return Font (FontOptions (Font::getDefaultMonospacedFontName(), h, Font::plain));
 }
 
-/** Pistache, le beagle du Studio des Chènevières. */
-inline std::unique_ptr<Drawable> createPistache()
+/** Pistache, le beagle du Studio des Chènevières (photo de sa tête). */
+inline Image getPistacheImage()
 {
-    static const char* svg = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-      <path d="M14 20c-5 7-5 20 1 26 3 3 7 0 7-4V23c0-4-5-6-8-3z" fill="#8a5630"/>
-      <path d="M50 20c5 7 5 20-1 26-3 3-7 0-7-4V23c0-4 5-6 8-3z" fill="#8a5630"/>
-      <path d="M19 26c0-10 6-15 13-15s13 5 13 15v9c0 10-6 17-13 17s-13-7-13-17z" fill="#d08f50"/>
-      <path d="M29 11h6v21c0 2-1 3-3 3s-3-1-3-3z" fill="#f2ece2"/>
-      <path d="M23 41c2 8 6 11 9 11s7-3 9-11c-4-2-14-2-18 0z" fill="#f2ece2"/>
-      <circle cx="25.5" cy="30" r="2.6" fill="#120d0a"/><circle cx="38.5" cy="30" r="2.6" fill="#120d0a"/>
-      <ellipse cx="32" cy="42" rx="4" ry="2.8" fill="#120d0a"/></svg>)";
+    return ImageCache::getFromMemory (BinaryData::pistache_png, BinaryData::pistache_pngSize);
+}
 
-    return Drawable::createFromSVGString (String (svg));
+/** Dessine la tête de Pistache dans un cadre arrondi, façon logo. */
+inline void drawPistache (Graphics& g, Rectangle<float> area, float corner = 6.0f, bool border = true)
+{
+    auto img = getPistacheImage();
+    if (! img.isValid()) return;
+    Graphics::ScopedSaveState s (g);
+    Path clip; clip.addRoundedRectangle (area, corner);
+    g.reduceClipRegion (clip);
+    g.drawImage (img, area, RectanglePlacement::centred | RectanglePlacement::fillDestination);
+    if (border)
+    {
+        g.setColour (Col::accent.withAlpha (0.8f));
+        g.strokePath (clip, PathStrokeType (1.2f));
+    }
 }
 
 /** Dessine un bouton-pastille façon console (M, S, ●, I…). */

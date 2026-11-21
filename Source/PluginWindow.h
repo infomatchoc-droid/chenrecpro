@@ -118,7 +118,9 @@ private:
             slider.setRange (r.getStart(), r.getEnd(), 0.0);
             slider.setValue (param.getCurrentValue(), dontSendNotification);
             if (auto d = param.getDefaultValue()) slider.setDoubleClickReturnValue (true, *d);
-            slider.textFromValueFunction = [this] (double v) { return param.valueToString ((float) v) + " " + param.getLabel(); };
+            slider.textFromValueFunction = [this] (double v) { return (param.valueToString ((float) v) + " " + param.getLabel()).trim(); };
+            slider.valueFromTextFunction = [this] (const String& t) { return (double) param.stringToValue (t); };
+            slider.updateText();
             slider.onValueChange = [this] { param.setParameter ((float) slider.getValue(), sendNotification); };
             slider.setColour (Slider::textBoxTextColourId, Col::accent);
             slider.setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
