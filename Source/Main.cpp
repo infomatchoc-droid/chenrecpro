@@ -17,6 +17,7 @@ using namespace juce;
 #include "Mixing.h"
 #include "Console.h"
 #include "Playlists.h"
+#include "Comping.h"
 #include "EditView.h"
 #include "Inspector.h"
 #include "PianoRoll.h"
@@ -134,7 +135,7 @@ public:
             ignoreUnused (res);
             return true;
         }
-        if (! cmd && (code == 'R' || code == 'r' || code == KeyPress::numberPadMultiply)) { EngineHelpers::toggleRecord (*edit); return true; }
+        if (! cmd && (code == 'R' || code == 'r' || code == KeyPress::numberPadMultiply)) { Comping::toggleRecord (*edit); return true; }
         if (cmd && k.getModifiers().isShiftDown() && (code == 'T' || code == 't')) { addInstrumentTrack(); return true; }
         if (code == KeyPress::homeKey || code == KeyPress::returnKey) { edit->getTransport().setPosition (0s); return true; }
         if (cmd && (code == 'S' || code == 's'))        { save(); return true; }
@@ -205,6 +206,7 @@ public:
                 m.addItem (43, "Boucle\tL", true, edit && edit->getTransport().looping.get());
                 m.addItem (44, String::fromUTF8 ("Métronome\tC"), true, edit && edit->clickTrackEnabled.get());
                 m.addItem (45, String::fromUTF8 ("MIDI rétrospectif\tMaj+R"));
+                m.addItem (46, String::fromUTF8 ("Nouvelle playlist à chaque prise"), true, edit && Comping::newPlaylistPerTake (*edit));
                 break;
             case 5:
                 m.addItem (50, String::fromUTF8 ("Gestionnaire de plugins…"));
@@ -238,6 +240,7 @@ public:
             case 11: edit->getUndoManager().redo(); break;
             case 20: addTrack(); break;
             case 24: addInstrumentTrack(); break;
+            case 46: Comping::setNewPlaylistPerTake (*edit, ! Comping::newPlaylistPerTake (*edit)); break;
             case 45: { auto res = edit->getTransport().applyRetrospectiveRecord (false); ignoreUnused (res); break; }
             case 21: if (auto* t = arrange->getSelectedTrack()) edit->deleteTrack (t); break;
             case 22: askTempo(); break;
@@ -245,7 +248,7 @@ public:
             case 30: showAudioSettings(); break;
             case 31: EngineHelpers::assignInputs (*edit); break;
             case 40: EngineHelpers::togglePlay (*edit); break;
-            case 41: EngineHelpers::toggleRecord (*edit); break;
+            case 41: Comping::toggleRecord (*edit); break;
             case 42: edit->getTransport().setPosition (0s); break;
             case 43: edit->getTransport().looping = ! edit->getTransport().looping.get(); break;
             case 44: edit->clickTrackEnabled = ! edit->clickTrackEnabled.get(); break;

@@ -5,6 +5,14 @@ Il reprend le meilleur de Cubase, Pro Tools, Logic et Ableton Live, et il est co
 
 Usage interne au studio pour l'instant.
 
+## v0.5 — « Comping »
+
+- **Couloirs de prises** : le bouton ≡ dans l'en-tête de piste (ou le menu playlist) affiche les autres playlists sous la piste.
+- **Comping** : glisser dans un couloir remplace la même zone de la playlist active. La sélection est calée sur la grille en mode Grille, et des raccords de 8 ms sont créés automatiquement.
+  - ▲ copie la prise entière ;
+  - double-clic sur le nom d'un couloir : bascule sur cette playlist.
+- **Nouvelle playlist à chaque prise** (menu Transport, activé par défaut) : quand on enregistre sur une piste qui contient déjà quelque chose, l'ancienne version est rangée en couloir et la nouvelle prise part sur une playlist vierge.
+
 ## v0.4 — « Mixage »
 
 - **Envois A–E** sur chaque tranche de la console : un clic sur un envoi vide ouvre le menu (bus existants, nouvelle FX réverb, délai ou vide).

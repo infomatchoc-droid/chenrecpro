@@ -139,7 +139,7 @@ public:
                 case 2: tr.setPosition (tr.getPosition() + te::TimeDuration::fromSeconds (2.0)); break;
                 case 3: tr.stop (false, false); break;
                 case 4: EngineHelpers::togglePlay (edit); break;
-                case 5: EngineHelpers::toggleRecord (edit); break;
+                case 5: Comping::toggleRecord (edit); break;
                 case 6: tr.looping = ! tr.looping.get(); break;
                 case 7: edit.clickTrackEnabled = ! edit.clickTrackEnabled.get(); break;
                 case 8: { auto res = tr.applyRetrospectiveRecord (false); ignoreUnused (res); break; }
@@ -296,8 +296,9 @@ public:
                 Rectangle<int> row (0, y, getWidth(), h);
                 if (row.getBottom() >= rulerH && row.getY() <= getHeight())
                 {
-                    paintLane (g, *t, row.withTrimmedLeft (headerW));
-                    paintHeader (g, *t, n, row.withWidth (headerW));
+                    paintLane (g, *t, row.withTrimmedLeft (headerW).withHeight (mainH));
+                    paintHeader (g, *t, n, row.withWidth (headerW).withHeight (mainH));
+                    if (h > mainH) paintCompLanes (g, *t, row.withTrimmedTop (mainH));
                 }
                 y += h; ++n;
             }
@@ -382,6 +383,12 @@ public:
         auto* t = trackAt (p.y);
         if (t == nullptr) { selectedClip = nullptr; notifySelection(); repaint(); return; }
 
+        if (p.y >= trackTop (*t) + mainH)
+        {
+            laneMouseDown (*t, e);
+            return;
+        }
+
         if (p.x < headerW)
         {
             headerClick (*t, p);
@@ -429,6 +436,14 @@ public:
         if (autoDragParam != nullptr)
         {
             automationDrag (e);
+            return;
+        }
+
+        if (compTrack != nullptr)
+        {
+            compT2 = jmax (0.0, xToTime (e.x));
+            if (transportBar.mode == TransportBar::Mode::grid) compT2 = snap (compT2);
+            repaint();
             return;
         }
 
@@ -492,7 +507,18 @@ public:
         repaint();
     }
 
-    void mouseUp (const MouseEvent&) override { draggingPlayhead = false; dragMode = DragMode::none; autoDragParam = nullptr; }
+    void mouseUp (const MouseEvent&) override
+    {
+        if (compTrack != nullptr)
+        {
+            auto lanes = Comping::getLanes (*compTrack);
+            if (compLane >= 0 && compLane < (int) lanes.size())
+                Comping::promote (*compTrack, lanes[(size_t) compLane], jmin (compT1, compT2), jmax (compT1, compT2));
+            compTrack = nullptr;
+            repaint();
+        }
+        draggingPlayhead = false; dragMode = DragMode::none; autoDragParam = nullptr;
+    }
 
     void mouseDoubleClick (const MouseEvent& e) override
     {
@@ -770,7 +796,7 @@ private:
     {
         auto pos = c.getPosition();
         auto x1 = timeToX (pos.getStart().inSeconds()), x2 = timeToX (pos.getEnd().inSeconds());
-        return { x1, (float) trackTop (t) + 2, x2 - x1, (float) trackHeight (t) - 5 };
+        return { x1, (float) trackTop (t) + 2, x2 - x1, (float) mainH - 5 };
     }
 
     DragMode hitZone (te::Track& t, te::Clip& c, Point<int> p) const
@@ -799,7 +825,8 @@ private:
 
     Rectangle<int> laneArea() const { return { headerW, rulerH, getWidth() - headerW - 12, getHeight() - rulerH - 12 }; }
     int scrollY() const             { return (int) vScroll.getCurrentRangeStart(); }
-    int trackHeight (te::Track&) const { return 86; }
+    static constexpr int mainH = 86, laneH = 46;
+    int trackHeight (te::Track& t) const { return mainH + Comping::countLanes (t) * laneH; }
 
     double xToTime (int x) const    { return scrollSeconds + (x - headerW) / pixelsPerSecond; }
     float timeToX (double t) const  { return (float) (headerW + (t - scrollSeconds) * pixelsPerSecond); }
@@ -974,7 +1001,13 @@ private:
                 if (te::isOnTargetTrack (*in, t, 0)) input = in->getInputDevice().getName();
         g.setColour (Col::text3);
         g.setFont (uiFont (11.0f));
-        g.drawText (input, r.getX() + 30, r.getY() + 27, r.getWidth() - 150, 14, Justification::centredLeft, true);
+        g.drawText (input, r.getX() + 30, r.getY() + 27, r.getWidth() - 170, 14, Justification::centredLeft, true);
+
+        // bouton couloirs de prises
+        {
+            auto lr = Rectangle<float> ((float) r.getRight() - 134, r.getY() + 26.0f, 18, 16);
+            drawPill (g, lr, String::fromUTF8 ("≡"), Comping::lanesShown (t), Col::accent);
+        }
 
         // playlist
         {
@@ -1027,6 +1060,11 @@ private:
         {
             if (auto* v = t.getVolumePlugin())
                 v->setVolumeDb (faderPosToDb (jlimit (0.0f, 1.0f, (p.x - 30.0f) / (headerW - 100.0f))));
+        }
+        else if (p.y >= top + 26 && p.y <= top + 42 && p.x >= headerW - 134 && p.x < headerW - 114)
+        {
+            Comping::setLanesShown (t, ! Comping::lanesShown (t));
+            updateScrollbars();
         }
         else if (p.y >= top + 26 && p.y <= top + 42 && p.x >= headerW - 112)
         {
@@ -1153,6 +1191,105 @@ private:
     }
 
     //==========================================================================
+    // Couloirs de comping
+    te::AudioTrack* compTrack = nullptr;
+    int compLane = -1;
+    double compT1 = 0, compT2 = 0;
+    std::map<String, std::unique_ptr<te::SmartThumbnail>> laneThumbs;
+
+    void laneMouseDown (te::AudioTrack& t, const MouseEvent& e)
+    {
+        auto idx = (e.y - trackTop (t) - mainH) / laneH;
+        auto lanes = Comping::getLanes (t);
+        if (idx < 0 || idx >= (int) lanes.size()) return;
+        auto& lane = lanes[(size_t) idx];
+        selectedTrack = &t;
+
+        if (e.x < headerW)
+        {
+            // ▲ : prise entière ; clic sur le nom : bascule sur cette playlist
+            if (e.x > headerW - 40)
+            {
+                double s0 = 1e9, s1 = 0;
+                for (auto& c : lane.clips) { s0 = jmin (s0, c.start); s1 = jmax (s1, c.start + c.length); }
+                if (s1 > s0) Comping::promote (t, lane, s0, s1);
+            }
+            else if (e.mods.isPopupMenu() || e.getNumberOfClicks() > 1)
+            {
+                Playlists::switchTo (t, lane.name);
+            }
+            repaint();
+            return;
+        }
+
+        compTrack = &t;
+        compLane = idx;
+        compT1 = compT2 = transportBar.mode == TransportBar::Mode::grid ? snap (xToTime (e.x)) : xToTime (e.x);
+        repaint();
+    }
+
+    void paintCompLanes (Graphics& g, te::AudioTrack& t, Rectangle<int> area)
+    {
+        auto lanes = Comping::getLanes (t);
+        auto col = t.getColour();
+        for (int i = 0; i < (int) lanes.size(); ++i)
+        {
+            auto row = Rectangle<int> (0, area.getY() + i * laneH, getWidth(), laneH);
+            auto& lane = lanes[(size_t) i];
+
+            // en-tête du couloir
+            auto hr = row.withWidth (headerW);
+            g.setColour (Colour (0xff191a1d));
+            g.fillRect (hr);
+            g.setColour (col.withAlpha (0.5f));
+            g.fillRect (hr.getX(), hr.getY(), 5, hr.getHeight() - 1);
+            g.setColour (Col::text2);
+            g.setFont (uiFont (11.5f));
+            g.drawText (lane.name, hr.getX() + 30, hr.getY(), headerW - 80, laneH, Justification::centredLeft, true);
+            drawPill (g, { (float) headerW - 34, hr.getY() + 13.0f, 24, 18 }, String::fromUTF8 ("▲"), false, Col::accent);
+
+            // zone de la prise
+            auto lr = row.withTrimmedLeft (headerW);
+            g.setColour (Colour (0xff131417));
+            g.fillRect (lr);
+            for (auto& c : lane.clips)
+            {
+                auto x1 = timeToX (c.start), x2 = timeToX (c.start + c.length);
+                if (x2 < lr.getX() || x1 > lr.getRight()) continue;
+                auto cr = Rectangle<float> (jmax ((float) lr.getX(), x1), lr.getY() + 3.0f, jmin ((float) lr.getRight(), x2) - jmax ((float) lr.getX(), x1), laneH - 6.0f);
+                g.setColour (col.withAlpha (0.12f));
+                g.fillRoundedRectangle (cr, 2.0f);
+
+                auto& th = laneThumbs[c.file.getFullPathName()];
+                if (th == nullptr && c.file.existsAsFile())
+                    th = std::make_unique<te::SmartThumbnail> (edit.engine, te::AudioFile (edit.engine, c.file), *this, &edit);
+                if (th != nullptr && ! th->isGeneratingProxy() && ! th->isOutOfDate())
+                {
+                    auto visStart = xToTime ((int) cr.getX()), visEnd = xToTime ((int) cr.getRight());
+                    auto src0 = c.offset + (visStart - c.start), src1 = c.offset + (visEnd - c.start);
+                    g.setColour (col.withAlpha (0.55f));
+                    th->drawChannel (g, cr.reduced (0, 2).toNearestInt(), { te::TimePosition::fromSeconds (src0), te::TimePosition::fromSeconds (src1) }, 0, 1.0f);
+                }
+                g.setColour (col.withAlpha (0.4f));
+                g.drawRoundedRectangle (Rectangle<float> (x1, lr.getY() + 3.0f, x2 - x1, laneH - 6.0f), 2.0f, 1.0f);
+            }
+
+            // sélection en cours
+            if (compTrack == &t && compLane == i)
+            {
+                auto a = timeToX (jmin (compT1, compT2)), b = timeToX (jmax (compT1, compT2));
+                g.setColour (Col::select.withAlpha (0.3f));
+                g.fillRect (a, (float) lr.getY() + 2, jmax (1.0f, b - a), (float) laneH - 4);
+                g.setColour (Col::select);
+                g.drawRect (a, (float) lr.getY() + 2, jmax (1.0f, b - a), (float) laneH - 4, 1.0f);
+            }
+
+            g.setColour (Col::line);
+            g.fillRect (0, row.getBottom() - 1, getWidth(), 1);
+        }
+    }
+
+    //==========================================================================
     // Automation du volume (courbe sur la piste)
     te::AutomatableParameter::Ptr autoDragParam;
     int autoDragIndex = -1;
@@ -1160,7 +1297,7 @@ private:
 
     Rectangle<float> automationArea (te::Track& t) const
     {
-        return { (float) headerW, trackTop (t) + 6.0f, (float) getWidth() - headerW, trackHeight (t) - 12.0f };
+        return { (float) headerW, trackTop (t) + 6.0f, (float) getWidth() - headerW, mainH - 12.0f };
     }
 
     float valueToY (Rectangle<float> a, float v) const  { return a.getBottom() - jlimit (0.0f, 1.0f, v) * a.getHeight(); }
@@ -1405,6 +1542,10 @@ private:
     }
 
     void valueTreeChildAdded (ValueTree&, ValueTree&) override        { triggerAsyncUpdate(); }
+    void valueTreePropertyChanged (ValueTree&, const Identifier& id) override
+    {
+        if (id == Comping::showLanesID) triggerAsyncUpdate();
+    }
     void valueTreeChildRemoved (ValueTree&, ValueTree& c, int) override
     {
         if (selectedClip != nullptr && ! selectedClip->state.getParent().isValid())

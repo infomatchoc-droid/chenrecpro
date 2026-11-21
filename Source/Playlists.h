@@ -147,6 +147,9 @@ inline void showMenu (te::ClipTrack& t, Component* target)
     m.addItem (2, "Dupliquer la playlist");
     m.addItem (3, String::fromUTF8 ("Renommer la playlist…"));
     m.addItem (4, "Supprimer la playlist", names.size() > 1);
+    m.addSeparator();
+    m.addItem (5, String::fromUTF8 ("Afficher les couloirs de prises (comping)"), names.size() > 1,
+               (bool) t.state.getProperty ("chenShowLanes", false));
 
     te::Track::Ptr keep (&t);
     m.showMenuAsync (target ? PopupMenu::Options().withTargetComponent (target) : PopupMenu::Options(),
@@ -157,6 +160,7 @@ inline void showMenu (te::ClipTrack& t, Component* target)
         if (r == 1) createNew (*ct);
         if (r == 2) duplicate (*ct);
         if (r == 4) deleteCurrent (*ct);
+        if (r == 5) ct->state.setProperty ("chenShowLanes", ! (bool) ct->state.getProperty ("chenShowLanes", false), nullptr);
         if (r >= 100) switchTo (*ct, names[r - 100]);
         if (r == 3)
         {
