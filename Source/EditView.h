@@ -523,13 +523,23 @@ public:
             int n = 1;
             for (auto* t : tracks)
             {
+                if (int ex = extraAbove (*t); ex > 0)
+                {
+                    paintFolder (g, Folders::folderOf (*t), { 0, y, getWidth(), ex });
+                    y += ex;
+                }
                 auto h = trackHeight (*t);
                 Rectangle<int> row (0, y, getWidth(), h);
-                if (row.getBottom() >= topH() && row.getY() <= getHeight())
+                if (h > 0 && row.getBottom() >= topH() && row.getY() <= getHeight())
                 {
                     paintLane (g, *t, row.withTrimmedLeft (headerW).withHeight (mainH));
                     paintHeader (g, *t, n, row.withWidth (headerW).withHeight (mainH));
                     if (h > mainH) paintCompLanes (g, *t, row.withTrimmedTop (mainH));
+                    if (auto fid = Folders::folderOf (*t); fid.isNotEmpty())
+                    {
+                        g.setColour (Folders::colour (edit, fid));       // filet du dossier
+                        g.fillRect (0, row.getY(), 3, h);
+                    }
                 }
                 y += h; ++n;
             }
@@ -615,6 +625,12 @@ public:
         chordDragIndex = -1;
         if (chordMouseDown (e)) return;
         if (selectedChord >= 0) { selectedChord = -1; repaint(); }
+
+        if (auto fid = folderAt (p.y); fid.isNotEmpty())
+        {
+            folderMouseDown (fid, e);
+            return;
+        }
 
         auto* t = trackAt (p.y);
         if (t == nullptr) { selectedClip = nullptr; notifySelection(); repaint(); return; }
@@ -878,6 +894,7 @@ public:
         }
         if (! cmd && (code == 'B' || code == 'b'))   { splitAtPlayhead(); return true; }
         if (cmd && (code == 'E' || code == 'e'))     { splitAtPlayhead(); return true; }   // Pro Tools : séparer
+        if (cmd && k.getModifiers().isShiftDown() && (code == 'D' || code == 'd')) { folderFromSelection(); return true; }
         if (cmd && (code == 'D' || code == 'd'))     { duplicateSelected(); return true; }
         if (cmd && k.getModifiers().isShiftDown() && (code == KeyPress::upKey || code == KeyPress::downKey))
         {
@@ -1124,7 +1141,46 @@ private:
     Rectangle<int> laneArea() const { return { headerW, topH(), getWidth() - headerW - 12, getHeight() - topH() - 12 }; }
     int scrollY() const             { return (int) vScroll.getCurrentRangeStart(); }
     static constexpr int mainH = 86, laneH = 46;
-    int trackHeight (te::Track& t) const { return mainH + Comping::countLanes (t) * laneH; }
+    static constexpr int folderH = 30;
+    int trackHeight (te::Track& t) const
+    {
+        if (auto* at = dynamic_cast<te::AudioTrack*> (&t); at != nullptr && Folders::isHidden (edit, *at)) return 0;
+        return mainH + Comping::countLanes (t) * laneH;
+    }
+    /** En-tête de dossier au-dessus de la première piste d'un dossier. */
+    int extraAbove (te::AudioTrack& t) const { return Folders::isFirstMember (edit, t) ? folderH : 0; }
+
+    /** Dossier dont l'en-tête est à cette hauteur (vide sinon). */
+    String folderAt (int y) const
+    {
+        if (y < topH()) return {};
+        int ty = topH() - scrollY();
+        for (auto* t : te::getAudioTracks (edit))
+        {
+            if (int ex = extraAbove (*t); ex > 0)
+            {
+                if (y >= ty && y < ty + ex) return Folders::folderOf (*t);
+                ty += ex;
+            }
+            ty += trackHeight (*t);
+        }
+        return {};
+    }
+
+    int folderTop (const String& id) const
+    {
+        int ty = topH() - scrollY();
+        for (auto* t : te::getAudioTracks (edit))
+        {
+            if (int ex = extraAbove (*t); ex > 0)
+            {
+                if (Folders::folderOf (*t) == id) return ty;
+                ty += ex;
+            }
+            ty += trackHeight (*t);
+        }
+        return ty;
+    }
 
     double xToTime (int x) const    { return scrollSeconds + (x - headerW) / pixelsPerSecond; }
     float timeToX (double t) const  { return (float) (headerW + (t - scrollSeconds) * pixelsPerSecond); }
@@ -1140,7 +1196,7 @@ private:
     int trackTop (te::Track& t) const
     {
         int y = topH() - scrollY();
-        for (auto* tr : te::getAudioTracks (edit)) { if (tr == &t) return y; y += trackHeight (*tr); }
+        for (auto* tr : te::getAudioTracks (edit)) { y += extraAbove (*tr); if (tr == &t) return y; y += trackHeight (*tr); }
         return y;
     }
 
@@ -1150,6 +1206,7 @@ private:
         int ty = topH() - scrollY();
         for (auto* t : te::getAudioTracks (edit))
         {
+            ty += extraAbove (*t);
             auto h = trackHeight (*t);
             if (y >= ty && y < ty + h) return t;
             ty += h;
@@ -1181,7 +1238,7 @@ private:
     void updateScrollbars()
     {
         int total = 0;
-        for (auto* t : te::getAudioTracks (edit)) total += trackHeight (*t);
+        for (auto* t : te::getAudioTracks (edit)) total += trackHeight (*t) + extraAbove (*t);
         vScroll.setRangeLimits (0, jmax (total + 40, laneArea().getHeight()));
         vScroll.setCurrentRange (vScroll.getCurrentRangeStart(), laneArea().getHeight());
 
@@ -1264,6 +1321,164 @@ private:
         g.fillRect (headerW, rulerH - 1, getWidth() - headerW, 1);
     }
 
+    //==========================================================================
+    // Dossiers
+    Rectangle<int> folderToggleRect (int y) const { return { 8, y + 7, 16, 16 }; }
+    Rectangle<int> folderMuteRect (int y) const   { return { headerW - 110, y + 6, 20, 17 }; }
+    Rectangle<int> folderSoloRect (int y) const   { return { headerW - 88, y + 6, 20, 17 }; }
+
+    void paintFolder (Graphics& g, const String& id, Rectangle<int> r)
+    {
+        if (r.getBottom() < topH() || r.getY() > getHeight()) return;
+        auto col = Folders::colour (edit, id);
+        auto members = Folders::members (edit, id);
+        bool collapsed = Folders::isCollapsed (edit, id);
+
+        // en-tête
+        auto hr = r.withWidth (headerW);
+        g.setGradientFill (ColourGradient (col.withAlpha (0.28f).overlaidWith (Col::panel2.withAlpha (0.6f)), 0, (float) hr.getY(),
+                                           Col::panel1, 0, (float) hr.getBottom(), false));
+        g.fillRect (hr);
+        g.setColour (col);
+        g.fillRect (0, r.getY(), 3, r.getHeight());
+        auto tg = folderToggleRect (r.getY()).toFloat();
+        Path tri;
+        if (collapsed) tri.addTriangle (tg.getX() + 4, tg.getY() + 3, tg.getX() + 4, tg.getBottom() - 3, tg.getRight() - 3, tg.getCentreY());
+        else           tri.addTriangle (tg.getX() + 3, tg.getY() + 5, tg.getRight() - 3, tg.getY() + 5, tg.getCentreX(), tg.getBottom() - 4);
+        g.setColour (col);
+        g.fillPath (tri);
+        g.setColour (Col::text);
+        g.setFont (uiFont (13.0f, true));
+        g.drawText (Folders::name (edit, id), 30, r.getY(), headerW - 150, r.getHeight(), Justification::centredLeft, true);
+        g.setColour (Col::text3);
+        g.setFont (uiFont (10.5f));
+        g.drawText (String (members.size()) + (members.size() > 1 ? " pistes" : " piste"), headerW - 64, r.getY(), 56, r.getHeight(), Justification::centredRight);
+        drawPill (g, folderMuteRect (r.getY()).toFloat(), "M", Folders::allMuted (edit, id), Colour (0xffc98a1a));
+        drawPill (g, folderSoloRect (r.getY()).toFloat(), "S", Folders::allSoloed (edit, id), Colour (0xffd6c33a));
+
+        // zone : aperçu des clips des pistes du dossier
+        auto lr = r.withTrimmedLeft (headerW);
+        g.setColour (col.withAlpha (0.07f));
+        g.fillRect (lr);
+        {
+            Graphics::ScopedSaveState ss (g);
+            g.reduceClipRegion (lr);
+            for (auto* t : members)
+                for (auto* c : t->getClips())
+                {
+                    auto pos = c->getPosition();
+                    float x1 = timeToX (pos.getStart().inSeconds()), x2 = timeToX (pos.getEnd().inSeconds());
+                    if (x2 < (float) headerW || x1 > (float) getWidth()) continue;
+                    g.setColour (t->getColour().withAlpha (0.45f));
+                    g.fillRect (x1, (float) r.getY() + 5.0f, jmax (2.0f, x2 - x1), (float) r.getHeight() - 10.0f);
+                }
+        }
+        g.setColour (Col::line);
+        g.fillRect (0, r.getBottom() - 1, getWidth(), 1);
+        g.fillRect (headerW - 1, r.getY(), 1, r.getHeight());
+    }
+
+    void folderMouseDown (const String& id, const MouseEvent& e)
+    {
+        int y = folderTop (id);
+        auto p = e.getPosition();
+        if (p.x < headerW && folderMuteRect (y).contains (p)) { Folders::setMute (edit, id, ! Folders::allMuted (edit, id)); repaint(); return; }
+        if (p.x < headerW && folderSoloRect (y).contains (p)) { Folders::setSolo (edit, id, ! Folders::allSoloed (edit, id)); repaint(); return; }
+
+        if (e.mods.isPopupMenu())
+        {
+            showFolderMenu (id);
+            return;
+        }
+        if (e.getNumberOfClicks() > 1 && p.x < headerW && p.x > 30) { renameFolder (id); return; }
+
+        if (folderToggleRect (y).expanded (6).contains (p) || p.x >= headerW || e.getNumberOfClicks() > 1)
+        {
+            Folders::setCollapsed (edit, id, ! Folders::isCollapsed (edit, id));
+            updateScrollbars();
+            repaint();
+            return;
+        }
+
+        // clic sur le nom : sélectionne les pistes du dossier
+        auto m = Folders::members (edit, id);
+        multiSel = m;
+        selectedTrack = m.isEmpty() ? nullptr : m.getFirst();
+        notifySelection();
+        repaint();
+    }
+
+    void renameFolder (const String& id)
+    {
+        auto* aw = new AlertWindow (String::fromUTF8 ("Renommer le dossier"), {}, MessageBoxIconType::NoIcon);
+        aw->addTextEditor ("name", Folders::name (edit, id));
+        aw->addButton ("OK", 1, KeyPress (KeyPress::returnKey));
+        aw->addButton ("Annuler", 0, KeyPress (KeyPress::escapeKey));
+        aw->enterModalState (true, ModalCallbackFunction::create ([sp = SafePointer<ArrangeView> (this), aw, id] (int r)
+        {
+            if (r == 1 && sp != nullptr)
+            {
+                auto n = aw->getTextEditorContents ("name").trim();
+                if (n.isNotEmpty()) Folders::rename (sp->edit, id, n);
+                sp->repaint();
+            }
+        }), true);
+    }
+
+    void showFolderMenu (const String& id)
+    {
+        PopupMenu m;
+        bool collapsed = Folders::isCollapsed (edit, id);
+        m.addItem (1, collapsed ? String::fromUTF8 ("Déplier") : String::fromUTF8 ("Replier"));
+        m.addItem (2, String::fromUTF8 ("Renommer…"));
+        m.addItem (3, String::fromUTF8 ("Sélectionner les pistes du dossier"));
+        PopupMenu colours;
+        for (int i = 0; i < 6; ++i) colours.addItem (100 + i, String::fromUTF8 ("Couleur ") + String (i + 1));
+        m.addSubMenu (String::fromUTF8 ("Couleur"), colours);
+        m.addSeparator();
+        m.addItem (4, String::fromUTF8 ("Tout replier"));
+        m.addItem (5, String::fromUTF8 ("Tout déplier"));
+        m.addSeparator();
+        m.addItem (6, String::fromUTF8 ("Défaire le dossier (garder les pistes)"));
+        m.showMenuAsync (PopupMenu::Options(), [sp = SafePointer<ArrangeView> (this), id] (int r)
+        {
+            if (sp == nullptr || r <= 0) return;
+            auto& ed = sp->edit;
+            if (r == 1) Folders::setCollapsed (ed, id, ! Folders::isCollapsed (ed, id));
+            else if (r == 2) sp->renameFolder (id);
+            else if (r == 3) { auto mm = Folders::members (ed, id); sp->multiSel = mm; sp->selectedTrack = mm.isEmpty() ? nullptr : mm.getFirst(); sp->notifySelection(); }
+            else if (r == 4 || r == 5)
+            {
+                for (auto f : ed.state.getChildWithName (Folders::listType))
+                    Folders::setCollapsed (ed, f.getProperty ("id").toString(), r == 4);
+            }
+            else if (r == 6) Folders::dissolve (ed, id);
+            else if (r >= 100) Folders::folderTree (ed, id).setProperty ("colour", r - 100, nullptr);
+            sp->updateScrollbars();
+            sp->repaint();
+        });
+    }
+
+public:
+    /** Range les pistes sélectionnées (ou la piste courante) dans un nouveau dossier. */
+    void folderFromSelection()
+    {
+        auto sel = getSelectedTracks();
+        if (sel.isEmpty()) return;
+        for (auto* t : sel) Folders::removeFromFolder (edit, *t);
+        Folders::create (edit, sel);
+        updateScrollbars();
+        repaint();
+    }
+
+    void removeSelectionFromFolder()
+    {
+        for (auto* t : getSelectedTracks()) Folders::removeFromFolder (edit, *t);
+        updateScrollbars();
+        repaint();
+    }
+
+private:
     void paintHeader (Graphics& g, te::AudioTrack& t, int number, Rectangle<int> r)
     {
         bool sel = &t == selectedTrack || multiSel.contains (&t);

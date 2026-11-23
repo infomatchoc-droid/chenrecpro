@@ -25,6 +25,7 @@ using namespace juce;
 #include "Playlists.h"
 #include "Comping.h"
 #include "ChordTrack.h"
+#include "Folders.h"
 #include "EditView.h"
 #include "Inspector.h"
 #include "PianoRoll.h"
@@ -177,6 +178,7 @@ public:
             return true;
         }
         if (cmd && (code == 'I' || code == 'i'))        { importAudio(); return true; }
+        if (cmd && k.getModifiers().isShiftDown() && (code == 'D' || code == 'd')) { if (arrange) arrange->folderFromSelection(); return true; }
         if (cmd && (code == 'Z' || code == 'z'))
         {
             if (k.getModifiers().isShiftDown()) edit->getUndoManager().redo();
@@ -228,6 +230,9 @@ public:
                 m.addItem (25, String::fromUTF8 ("Nouvelle piste FX : Réverb"));
                 m.addItem (26, String::fromUTF8 ("Nouvelle piste FX : Délai"));
                 m.addItem (21, String::fromUTF8 ("Supprimer la piste sélectionnée"));
+                m.addSeparator();
+                m.addItem (130, String::fromUTF8 ("Ranger les pistes sélectionnées dans un dossier\tCtrl+Maj+D"));
+                m.addItem (131, String::fromUTF8 ("Sortir les pistes sélectionnées de leur dossier"));
                 m.addSeparator();
                 m.addItem (22, String::fromUTF8 ("Tempo du projet…"));
                 m.addItem (23, "Ajouter un marqueur au curseur");
@@ -290,6 +295,8 @@ public:
             case 21: if (auto* t = arrange->getSelectedTrack()) edit->deleteTrack (t); break;
             case 22: askTempo(); break;
             case 23: addMarker(); break;
+            case 130: if (arrange) arrange->folderFromSelection(); break;
+            case 131: if (arrange) arrange->removeSelectionFromFolder(); break;
             case 127: if (arrange) arrange->toggleChordTrack(); break;
             case 128: if (arrange) { if (! arrange->isChordTrackShown()) arrange->toggleChordTrack(); arrange->chordTrackCommand (1); } break;
             case 129: if (arrange) { if (! arrange->isChordTrackShown()) arrange->toggleChordTrack(); arrange->chordTrackCommand (3); } break;

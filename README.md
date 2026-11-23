@@ -5,6 +5,15 @@ Il reprend le meilleur de Cubase, Pro Tools, Logic et Ableton Live, et il est co
 
 Usage interne au studio pour l'instant.
 
+## v0.13 — « Dossiers »
+
+- **Pistes dossier**, comme dans Cubase.
+  - Sélectionne des pistes (Ctrl+clic sur les en-têtes), puis **Ctrl+Maj+D** ou Projet › Ranger les pistes sélectionnées dans un dossier. Elles se regroupent sous un en-tête de dossier, les unes à la suite des autres.
+  - ▾/▸, ou clic dans la zone du dossier : replier/déplier. Replié, le dossier montre en aperçu les clips de toutes ses pistes.
+  - **M** et **S** du dossier : muter ou soloter toutes ses pistes d'un coup. Clic sur le nom : sélectionner toutes ses pistes.
+  - Double-clic sur le nom : renommer. Clic droit : couleur, tout replier/déplier, défaire le dossier.
+  - Un filet de la couleur du dossier marque ses pistes. Le dossier sert à ranger : les sorties ne changent pas (pour un sous-groupe audio, « Nouvelle piste Bus » dans la sortie).
+
 ## v0.12 — « Piste d'accords »
 
 - **Piste d'accords** (Chord Track de Cubase), sous la règle : touche **K** ou Projet › Piste d'accords.
@@ -153,6 +162,8 @@ Usage interne au studio pour l'instant.
 | F3 | Console |
 | L | Boucle |
 | C | Métronome |
+| K | Piste d'accords |
+| Ctrl+Maj+D | Ranger les pistes sélectionnées dans un dossier |
 | F | Zoom pour tout voir |
 | Ctrl+T | Nouvelle piste |
 | Ctrl+I | Importer un fichier audio |
