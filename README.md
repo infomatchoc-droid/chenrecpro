@@ -5,6 +5,16 @@ Il reprend le meilleur de Cubase, Pro Tools, Logic et Ableton Live, et il est co
 
 Usage interne au studio pour l'instant.
 
+## v0.15 — « Raccourcis »
+
+- **Raccourcis clavier personnalisables**, comme les Key Commands de Cubase : Édition › Raccourcis clavier et macros… (Ctrl+Alt+K).
+  - Toutes les commandes sont rangées par catégorie (Transport, Fenêtres, Édition, Projet), avec une recherche par nom ou par touche.
+  - « Ajouter une touche » (ou double-clic), puis appuie sur la touche voulue. Plusieurs touches par commande sont possibles, pavé numérique compris. Si la touche est déjà prise, ChènRecPro propose de la réattribuer.
+  - **Préréglages Cubase et Pro Tools** : pavé * pour enregistrer, Alt+X pour couper, F12 ou Ctrl+Espace façon Pro Tools… « Par défaut » et « Tout remettre par défaut » pour revenir en arrière.
+- **Macros** : une touche qui enchaîne plusieurs commandes (par exemple : retour au début + métronome + enregistrer).
+- Les menus et la barre d'état affichent tes raccourcis à toi. La console (F3) obéit aux mêmes raccourcis.
+- Réglages gardés d'une session à l'autre.
+
 ## v0.14 — « Freeze »
 
 - **Geler une piste** (Track Freeze de Cubase / Logic) : bouton **flocon** dans l'en-tête, Ctrl+Maj+F, ou Projet › Geler / dégeler.
@@ -173,6 +183,7 @@ Usage interne au studio pour l'instant.
 | K | Piste d'accords |
 | Ctrl+Maj+D | Ranger les pistes sélectionnées dans un dossier |
 | Ctrl+Maj+F | Geler / dégeler la piste sélectionnée |
+| Ctrl+Alt+K | Raccourcis clavier et macros |
 | F | Zoom pour tout voir |
 | Ctrl+T | Nouvelle piste |
 | Ctrl+I | Importer un fichier audio |

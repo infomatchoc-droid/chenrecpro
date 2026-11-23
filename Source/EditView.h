@@ -914,16 +914,8 @@ public:
             repaint();
             return true;
         }
-        if (! cmd && (code == 'B' || code == 'b'))   { splitAtPlayhead(); return true; }
-        if (cmd && (code == 'E' || code == 'e'))     { splitAtPlayhead(); return true; }   // Pro Tools : séparer
-        if (cmd && k.getModifiers().isShiftDown() && (code == 'D' || code == 'd')) { folderFromSelection(); return true; }
-        if (cmd && (code == 'D' || code == 'd'))     { duplicateSelected(); return true; }
-        if (cmd && k.getModifiers().isShiftDown() && (code == KeyPress::upKey || code == KeyPress::downKey))
-        {
-            nudgeClipGain (code == KeyPress::upKey ? 1.0f : -1.0f);
-            return true;
-        }
-        return false;
+        ignoreUnused (cmd);
+        return false;   // le reste : raccourcis personnalisables (Édition › Raccourcis clavier et macros)
     }
 
     //==========================================================================

@@ -796,9 +796,12 @@ public:
 
     void closeButtonPressed() override { if (onClose) onClose(); }
 
+    /** Les raccourcis de l'appli marchent aussi quand la console a le focus (F3 la referme). */
+    std::function<bool (const KeyPress&)> forwardKey;
+
     bool keyPressed (const KeyPress& k) override
     {
-        if (k.getKeyCode() == KeyPress::F3Key) { if (onClose) onClose(); return true; }
+        if (forwardKey && forwardKey (k)) return true;
         return DocumentWindow::keyPressed (k);
     }
 

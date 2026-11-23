@@ -26,6 +26,7 @@ using namespace juce;
 #include "Comping.h"
 #include "ChordTrack.h"
 #include "Folders.h"
+#include "KeyCommands.h"
 #include "EditView.h"
 #include "Inspector.h"
 #include "PianoRoll.h"
@@ -46,6 +47,7 @@ public:
     explicit MainComponent (te::Engine& e) : engine (e)
     {
         setWantsKeyboardFocus (true);
+        registerCommands();
         preferAsioOnFirstLaunch();
         openOrCreate (getDefaultProjectFile());
         startTimerHz (2);
@@ -99,12 +101,18 @@ public:
 
         // raccourcis : uniquement dans la place libre entre les deux textes
         auto middle = area.withTrimmedLeft (leftW).withTrimmedRight (rightW);
-        const char* shortcuts[] = { "F3 · Console", "Espace · Lecture", "R · Enregistrer", "Tab · Session", "B · Séparer",
-                                    "Ctrl+D · Dupliquer", "Maj+R · MIDI rétro", "A · Automation", "W · Écriture" };
+        const std::pair<const char*, const char*> hints[] = {
+            { "view.mixer", "Console" }, { "transport.play", "Lecture" }, { "transport.record", "Enregistrer" },
+            { "view.session", "Session" }, { "edit.split", "Séparer" }, { "edit.duplicate", "Dupliquer" },
+            { "transport.retro", "MIDI rétro" }, { "view.automation", "Automation" }, { "transport.write", "Écriture" } };
         String line;
-        for (auto* sc : shortcuts)
+        for (auto& [id, label] : hints)
         {
-            auto candidate = line.isEmpty() ? String::fromUTF8 (sc) : line + "     " + String::fromUTF8 (sc);
+            if (keys == nullptr) break;
+            auto ks = keys->keysFor (id);
+            if (ks.isEmpty()) continue;
+            auto sc = Keys::describe (ks.getFirst()) + String::fromUTF8 (" · ") + String::fromUTF8 (label);
+            auto candidate = line.isEmpty() ? sc : line + "     " + sc;
             if (GlyphArrangement::getStringWidth (font, candidate) > middle.getWidth()) break;
             line = candidate;
         }
@@ -154,51 +162,59 @@ public:
 
     bool keyPressed (const KeyPress& k) override
     {
-        auto cmd = k.getModifiers().isCommandDown();
-        auto code = k.getKeyCode();
+        return keys != nullptr && edit != nullptr && keys->handle (k);   // raccourcis personnalisables
+    }
 
-        if (code == KeyPress::F3Key)                    { toggleConsole(); return true; }
-        if (code == KeyPress::tabKey)                   { showSession = ! showSession; resized(); return true; }
-        if (code == KeyPress::spaceKey)                 { EngineHelpers::togglePlay (*edit); return true; }
-        if (! cmd && k.getModifiers().isShiftDown() && (code == 'R' || code == 'r' || code == KeyPress::numberPadMultiply))
-        {
-            auto res = edit->getTransport().applyRetrospectiveRecord (false);   // MIDI rétrospectif
-            ignoreUnused (res);
-            return true;
-        }
-        if (! cmd && (code == 'R' || code == 'r' || code == KeyPress::numberPadMultiply)) { Comping::toggleRecord (*edit); return true; }
-        if (cmd && k.getModifiers().isShiftDown() && (code == 'T' || code == 't')) { addInstrumentTrack(); return true; }
-        if (code == KeyPress::homeKey || code == KeyPress::returnKey) { edit->getTransport().setPosition (0s); return true; }
-        if (cmd && (code == 'S' || code == 's'))        { save(); return true; }
-        if (cmd && (code == 'T' || code == 't'))        { addTrack(); return true; }
-        if (cmd && (code == 'G' || code == 'g'))
-        {
-            if (k.getModifiers().isShiftDown()) ungroupSelection();
-            else                                groupSelection();
-            return true;
-        }
-        if (cmd && (code == 'I' || code == 'i'))        { importAudio(); return true; }
-        if (cmd && k.getModifiers().isShiftDown() && (code == 'D' || code == 'd')) { if (arrange) arrange->folderFromSelection(); return true; }
-        if (cmd && k.getModifiers().isShiftDown() && (code == 'F' || code == 'f')) { if (arrange) arrange->toggleFreezeSelected(); return true; }
-        if (cmd && (code == 'Z' || code == 'z'))
-        {
-            if (k.getModifiers().isShiftDown()) edit->getUndoManager().redo();
-            else                                edit->getUndoManager().undo();
-            return true;
-        }
-        if (! cmd && (code == 'L' || code == 'l'))     { edit->getTransport().looping = ! edit->getTransport().looping.get(); return true; }
-        if (! cmd && (code == 'C' || code == 'c'))     { edit->clickTrackEnabled = ! edit->clickTrackEnabled.get(); return true; }
-        if (! cmd && (code == 'K' || code == 'k'))     { if (arrange) arrange->toggleChordTrack(); return true; }
-        if (! cmd && (code == 'F' || code == 'f'))     { arrange->zoomToFit(); return true; }
-        if (! cmd && (code == 'I' || code == 'i'))     { showInspector = ! showInspector; resized(); return true; }
-        if (! cmd && (code == 'A' || code == 'a'))     { arrange->toggleAutomationView(); return true; }
-        if (! cmd && (code == 'W' || code == 'w'))
-        {
-            auto& arm = edit->getAutomationRecordManager();
-            arm.setWritingAutomation (! arm.isWritingAutomation());
-            return true;
-        }
-        return false;
+    /** Toutes les commandes au clavier (Édition › Raccourcis clavier et macros). */
+    void registerCommands()
+    {
+        keys = std::make_unique<Keys::Registry> (engine.getPropertyStorage().getPropertiesFile());
+        using namespace Keys;
+        auto& r = *keys;
+        auto A = [this] { return arrange.get(); };
+
+        r.add ("transport.play", "Lecture / Stop", "Transport", { key (KeyPress::spaceKey) }, [this] { EngineHelpers::togglePlay (*edit); });
+        r.add ("transport.record", "Enregistrer", "Transport", { key ('R'), key (KeyPress::numberPadMultiply) }, [this] { Comping::toggleRecord (*edit); });
+        r.add ("transport.retro", "MIDI rétrospectif", "Transport", { key ('R', shift), key (KeyPress::numberPadMultiply, shift) },
+               [this] { auto res = edit->getTransport().applyRetrospectiveRecord (false); ignoreUnused (res); });
+        r.add ("transport.start", "Retour au début", "Transport", { key (KeyPress::homeKey), key (KeyPress::returnKey) }, [this] { edit->getTransport().setPosition (0s); });
+        r.add ("transport.end", "Aller à la fin du projet", "Transport", { key (KeyPress::endKey) }, [this] { edit->getTransport().setPosition (te::toPosition (edit->getLength())); });
+        r.add ("transport.loop", "Boucle", "Transport", { key ('L') }, [this] { edit->getTransport().looping = ! edit->getTransport().looping.get(); });
+        r.add ("transport.click", "Métronome", "Transport", { key ('C') }, [this] { edit->clickTrackEnabled = ! edit->clickTrackEnabled.get(); });
+        r.add ("transport.write", "Écriture d'automation (W)", "Transport", { key ('W') },
+               [this] { auto& arm = edit->getAutomationRecordManager(); arm.setWritingAutomation (! arm.isWritingAutomation()); });
+        r.add ("transport.marker", "Ajouter un marqueur au curseur", "Transport", { key (KeyPress::insertKey) }, [this] { addMarker(); });
+
+        r.add ("view.mixer", "Console", "Fenêtres", { key (KeyPress::F3Key) }, [this] { toggleConsole(); });
+        r.add ("view.session", "Vue Session (Ableton)", "Fenêtres", { key (KeyPress::tabKey) }, [this] { showSession = ! showSession; resized(); });
+        r.add ("view.inspector", "Inspecteur", "Fenêtres", { key ('I') }, [this] { showInspector = ! showInspector; resized(); });
+        r.add ("view.automation", "Vue automation", "Fenêtres", { key ('A') }, [A] { if (A()) A()->toggleAutomationView(); });
+        r.add ("view.chords", "Piste d'accords", "Fenêtres", { key ('K') }, [A] { if (A()) A()->toggleChordTrack(); });
+        r.add ("view.fit", "Zoom pour tout voir", "Fenêtres", { key ('F') }, [A] { if (A()) A()->zoomToFit(); });
+        r.add ("view.keys", "Raccourcis clavier et macros…", "Fenêtres", { key ('K', ctrl | alt) }, [this] { Keys::showEditor (*keys); });
+
+        r.add ("edit.undo", "Annuler", "Édition", { key ('Z', ctrl) }, [this] { edit->getUndoManager().undo(); });
+        r.add ("edit.redo", "Rétablir", "Édition", { key ('Z', ctrl | shift), key ('Y', ctrl) }, [this] { edit->getUndoManager().redo(); });
+        r.add ("edit.split", "Couper le clip au curseur", "Édition", { key ('B'), key ('E', ctrl) }, [A] { if (A()) A()->splitAtPlayhead(); });
+        r.add ("edit.duplicate", "Dupliquer le clip", "Édition", { key ('D', ctrl) }, [A] { if (A()) A()->duplicateSelected(); });
+        r.add ("edit.gainUp", "Gain du clip +1 dB", "Édition", { key (KeyPress::upKey, ctrl | shift) }, [A] { if (A()) A()->nudgeClipGain (1.0f); });
+        r.add ("edit.gainDown", "Gain du clip -1 dB", "Édition", { key (KeyPress::downKey, ctrl | shift) }, [A] { if (A()) A()->nudgeClipGain (-1.0f); });
+
+        r.add ("project.save", "Enregistrer le projet", "Projet", { key ('S', ctrl) }, [this] { save(); });
+        r.add ("project.newAudio", "Nouvelle piste audio", "Projet", { key ('T', ctrl) }, [this] { addTrack(); });
+        r.add ("project.newInstrument", "Nouvelle piste instrument…", "Projet", { key ('T', ctrl | shift) }, [this] { addInstrumentTrack(); });
+        r.add ("project.import", "Importer un fichier audio…", "Projet", { key ('I', ctrl) }, [this] { importAudio(); });
+        r.add ("project.exportMix", "Exporter le mix (WAV)…", "Projet", {}, [this] { exportMix(); });
+        r.add ("project.group", "Grouper les pistes sélectionnées", "Projet", { key ('G', ctrl) }, [this] { groupSelection(); });
+        r.add ("project.ungroup", "Dégrouper", "Projet", { key ('G', ctrl | shift) }, [this] { ungroupSelection(); });
+        r.add ("project.folder", "Ranger les pistes sélectionnées dans un dossier", "Projet", { key ('D', ctrl | shift) }, [A] { if (A()) A()->folderFromSelection(); });
+        r.add ("project.freeze", "Geler / dégeler la piste sélectionnée", "Projet", { key ('F', ctrl | shift) }, [A] { if (A()) A()->toggleFreezeSelected(); });
+        r.add ("project.tempo", "Tempo du projet…", "Projet", {}, [this] { askTempo(); });
+        r.add ("project.fxReverb", "Nouvelle piste FX : Réverb", "Projet", {}, [this] { Mixing::createFxTrack (*edit, Mixing::FxKind::reverb); });
+        r.add ("project.fxDelay", "Nouvelle piste FX : Délai", "Projet", {}, [this] { Mixing::createFxTrack (*edit, Mixing::FxKind::delay); });
+        r.add ("project.chordsToMidi", "Accords → MIDI", "Projet", {},
+               [A] { if (auto* a = A()) { if (! a->isChordTrackShown()) a->toggleChordTrack(); a->chordTrackCommand (1); } });
+        keys->load();
     }
 
     //==========================================================================
@@ -224,6 +240,8 @@ public:
             case 1:
                 m.addItem (10, "Annuler\tCtrl+Z", edit && edit->getUndoManager().canUndo());
                 m.addItem (11, String::fromUTF8 ("Rétablir\tCtrl+Maj+Z"), edit && edit->getUndoManager().canRedo());
+                m.addSeparator();
+                m.addItem (12, keys->menuLabel ("view.keys", "Raccourcis clavier et macros…"));
                 break;
             case 2:
                 m.addItem (20, "Nouvelle piste audio\tCtrl+T");
@@ -248,23 +266,23 @@ public:
                 m.addItem (31, String::fromUTF8 ("Réassigner les entrées aux pistes"));
                 break;
             case 4:
-                m.addItem (40, "Lecture / Stop\tEspace");
-                m.addItem (41, "Enregistrer\tR");
-                m.addItem (42, String::fromUTF8 ("Retour au début\tEntrée"));
-                m.addItem (43, "Boucle\tL", true, edit && edit->getTransport().looping.get());
-                m.addItem (44, String::fromUTF8 ("Métronome\tC"), true, edit && edit->clickTrackEnabled.get());
-                m.addItem (45, String::fromUTF8 ("MIDI rétrospectif\tMaj+R"));
+                m.addItem (40, keys->menuLabel ("transport.play", "Lecture / Stop"));
+                m.addItem (41, keys->menuLabel ("transport.record", "Enregistrer"));
+                m.addItem (42, keys->menuLabel ("transport.start", "Retour au début"));
+                m.addItem (43, keys->menuLabel ("transport.loop", "Boucle"), true, edit && edit->getTransport().looping.get());
+                m.addItem (44, keys->menuLabel ("transport.click", "Métronome"), true, edit && edit->clickTrackEnabled.get());
+                m.addItem (45, keys->menuLabel ("transport.retro", "MIDI rétrospectif"));
                 m.addItem (46, String::fromUTF8 ("Nouvelle playlist à chaque prise"), true, edit && Comping::newPlaylistPerTake (*edit));
                 break;
             case 5:
                 m.addItem (50, String::fromUTF8 ("Gestionnaire de plugins…"));
                 break;
             case 6:
-                m.addItem (64, String::fromUTF8 ("Vue Session (Ableton)\tTab"), true, showSession);
-                m.addItem (60, String::fromUTF8 ("Console\tF3"), true, consoleWindow != nullptr);
-                m.addItem (61, String::fromUTF8 ("Zoom pour tout voir\tF"));
-                m.addItem (62, "Inspecteur\tI", true, showInspector);
-                m.addItem (63, "Automation du volume\tA", true, arrange && arrange->automationView);
+                m.addItem (64, keys->menuLabel ("view.session", "Vue Session (Ableton)"), true, showSession);
+                m.addItem (60, keys->menuLabel ("view.mixer", "Console"), true, consoleWindow != nullptr);
+                m.addItem (61, keys->menuLabel ("view.fit", "Zoom pour tout voir"));
+                m.addItem (62, keys->menuLabel ("view.inspector", "Inspecteur"), true, showInspector);
+                m.addItem (63, keys->menuLabel ("view.automation", "Vue automation"), true, arrange && arrange->automationView);
                 break;
             case 7:
                 m.addItem (70, String::fromUTF8 ("À propos de ChènRecPro"));
@@ -290,6 +308,7 @@ public:
             case 9:  JUCEApplication::getInstance()->systemRequestedQuit(); break;
             case 10: edit->getUndoManager().undo(); break;
             case 11: edit->getUndoManager().redo(); break;
+            case 12: Keys::showEditor (*keys); break;
             case 20: addTrack(); break;
             case 24: addInstrumentTrack(); break;
             case 46: Comping::setNewPlaylistPerTake (*edit, ! Comping::newPlaylistPerTake (*edit)); break;
@@ -326,6 +345,7 @@ public:
 private:
     te::Engine& engine;
     std::unique_ptr<te::Edit> edit;
+    std::unique_ptr<Keys::Registry> keys;
     File editFile;
     std::unique_ptr<TransportBar> transportBar;
     std::unique_ptr<ArrangeView> arrange;
@@ -685,6 +705,7 @@ private:
             return;
         }
         consoleWindow = std::make_unique<ConsoleWindow> (*edit, [this] { MessageManager::callAsync ([sp = SafePointer<MainComponent> (this)] { if (sp) sp->toggleConsole(); }); });
+        consoleWindow->forwardKey = [sp = SafePointer<MainComponent> (this)] (const KeyPress& k) { return sp != nullptr && sp->keyPressed (k); };
         consoleWindow->toFront (true);
     }
 
