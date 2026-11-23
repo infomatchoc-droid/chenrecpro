@@ -279,7 +279,233 @@ public:
                     lm->measurer.removeClient (meterClients[t->itemID]);
     }
 
-    static constexpr int headerW = 250, rulerH = 46, markerH = 18;
+    static constexpr int headerW = 250, rulerH = 46, markerH = 18, chordH = 30;
+
+    //==========================================================================
+    // Piste d'accords
+    bool chordsShown() const { return (bool) edit.state.getProperty ("chenShowChords", false); }
+    int topH() const { return rulerH + (chordsShown() ? chordH : 0); }
+
+public:
+    void toggleChordTrack()
+    {
+        edit.state.setProperty ("chenShowChords", ! chordsShown(), nullptr);
+        resized();
+        repaint();
+    }
+    bool isChordTrackShown() const { return chordsShown(); }
+
+    /** Piste instrument où écouter / écrire les accords : la sélection, sinon la première. */
+    te::AudioTrack* chordTargetTrack() const
+    {
+        if (selectedTrack != nullptr && EngineHelpers::isInstrumentTrack (*selectedTrack)) return selectedTrack;
+        for (auto* t : te::getAudioTracks (edit))
+            if (EngineHelpers::isInstrumentTrack (*t)) return t;
+        return nullptr;
+    }
+
+    void auditionChord (const Chords::Chord& c)
+    {
+        auto* t = chordTargetTrack();
+        if (t == nullptr) return;
+        auto notes = Chords::voicing (c);
+        for (int n : notes) t->injectLiveMidiMessage (MidiMessage::noteOn (1, n, (uint8) 85), chordAuditionSource);
+        auto tp = te::Track::Ptr (t);
+        auto src = chordAuditionSource;
+        Timer::callAfterDelay (700, [tp, notes, src]
+        {
+            if (auto* t2 = dynamic_cast<te::AudioTrack*> (tp.get()))
+                for (int n : notes) t2->injectLiveMidiMessage (MidiMessage::noteOff (1, n), src);
+        });
+    }
+
+private:
+    te::MPESourceID chordAuditionSource = te::createUniqueMPESourceID();
+    int chordDragIndex = -1;
+    double chordDragOffset = 0.0;
+    int selectedChord = -1;
+
+    double beatAtX (int x) const { return edit.tempoSequence.toBeats (te::TimePosition::fromSeconds (jmax (0.0, xToTime (x)))).inBeats(); }
+    int xAtBeat (double b) const { return (int) timeToX (edit.tempoSequence.toTime (te::BeatPosition::fromBeats (b)).inSeconds()); }
+
+    int chordIndexAt (int x) const
+    {
+        auto chords = Chords::get (edit);
+        for (size_t i = 0; i < chords.size(); ++i)
+        {
+            int x1 = xAtBeat (chords[i].beat), x2 = xAtBeat (Chords::endOf (edit, chords, i));
+            if (x >= x1 && x < jmax (x1 + 24, x2)) return (int) i;
+        }
+        return -1;
+    }
+
+    void paintChords (Graphics& g)
+    {
+        if (! chordsShown()) return;
+        Rectangle<int> row (0, rulerH, getWidth(), chordH);
+        g.setColour (Colour (0xff15161a));
+        g.fillRect (row);
+        auto hdr = row.withWidth (headerW);
+        g.setColour (Col::panel1);
+        g.fillRect (hdr);
+        g.setColour (Col::accent);
+        g.setFont (uiFont (11.0f, true));
+        g.drawText (String::fromUTF8 ("♪  ACCORDS"), hdr.reduced (12, 0).removeFromLeft (90), Justification::centredLeft);
+        g.setColour (Col::text3);
+        g.setFont (uiFont (10.0f));
+        auto* tt = chordTargetTrack();
+        g.drawText (tt ? String::fromUTF8 ("écoute : ") + tt->getName() : String::fromUTF8 ("(pas de piste instrument)"),
+                    hdr.reduced (12, 0).withTrimmedLeft (90), Justification::centredRight, true);
+
+        Graphics::ScopedSaveState ss (g);
+        g.reduceClipRegion (row.withTrimmedLeft (headerW));
+        auto chords = Chords::get (edit);
+        for (size_t i = 0; i < chords.size(); ++i)
+        {
+            int x1 = xAtBeat (chords[i].beat), x2 = xAtBeat (Chords::endOf (edit, chords, i));
+            auto r = Rectangle<int> (x1, rulerH + 3, jmax (24, x2 - x1) - 2, chordH - 6).toFloat();
+            bool sel = (int) i == selectedChord;
+            g.setColour (sel ? Col::accent : Colour (0xff2b2418));
+            g.fillRoundedRectangle (r, 3.0f);
+            g.setColour (Col::accent.withAlpha (sel ? 1.0f : 0.7f));
+            g.drawRoundedRectangle (r, 3.0f, 1.0f);
+            g.setColour (sel ? Colour (0xff15100a) : Col::text);
+            g.setFont (uiFont (13.0f, true));
+            g.drawText (Chords::name (chords[i]), r.reduced (7, 0).toNearestInt(), Justification::centredLeft, true);
+        }
+        g.setColour (Colour (0xff24262c));
+        g.fillRect (headerW, rulerH + chordH - 1, getWidth() - headerW, 1);
+    }
+
+    bool chordMouseDown (const MouseEvent& e)
+    {
+        if (! chordsShown() || e.y < rulerH || e.y >= rulerH + chordH) return false;
+        if (e.x < headerW)
+        {
+            // en-tête : menu de la piste d'accords
+            PopupMenu m;
+            m.addItem (1, String::fromUTF8 ("Accords → MIDI (sur la piste instrument)"), chordTargetTrack() != nullptr && ! Chords::get (edit).empty());
+            m.addItem (2, String::fromUTF8 ("Les notes du clip MIDI sélectionné suivent les accords"), dynamic_cast<te::MidiClip*> (selectedClip.get()) != nullptr);
+            m.addItem (3, String::fromUTF8 ("Détecter les accords du clip MIDI sélectionné"), dynamic_cast<te::MidiClip*> (selectedClip.get()) != nullptr);
+            m.addSeparator();
+            m.addItem (4, String::fromUTF8 ("Effacer tous les accords"), ! Chords::get (edit).empty());
+            m.addItem (5, String::fromUTF8 ("Masquer la piste d'accords"));
+            m.showMenuAsync (PopupMenu::Options(), [sp = SafePointer<ArrangeView> (this)] (int r)
+            {
+                if (sp == nullptr || r <= 0) return;
+                sp->chordTrackCommand (r);
+            });
+            return true;
+        }
+
+        int idx = chordIndexAt (e.x);
+        auto chords = Chords::get (edit);
+        if (idx >= 0)
+        {
+            selectedChord = idx;
+            if (e.mods.isPopupMenu())
+            {
+                editChord (idx);
+                return true;
+            }
+            auditionChord (chords[(size_t) idx]);
+            chordDragIndex = idx;
+            chordDragOffset = beatAtX (e.x) - chords[(size_t) idx].beat;
+            repaint();
+            return true;
+        }
+
+        // case vide : poser un accord (suite logique : même accord que le précédent, à changer)
+        const double beat = std::floor (beatAtX (e.x) + 1.0e-6);   // le temps sur lequel on a cliqué
+        Chords::chooseChord (Chords::at (chords, beat), [sp = SafePointer<ArrangeView> (this), beat] (Chords::Chord c)
+        {
+            if (sp == nullptr) return;
+            auto all = Chords::get (sp->edit);
+            c.beat = beat;
+            all.erase (std::remove_if (all.begin(), all.end(), [beat] (auto& x) { return std::abs (x.beat - beat) < 1.0e-3; }), all.end());
+            all.push_back (c);
+            std::sort (all.begin(), all.end(), [] (auto& a, auto& b) { return a.beat < b.beat; });
+            Chords::set (sp->edit, all);
+            sp->auditionChord (c);
+            sp->selectedChord = -1;
+            sp->repaint();
+        });
+        return true;
+    }
+
+    void editChord (int idx)
+    {
+        auto chords = Chords::get (edit);
+        if (idx < 0 || idx >= (int) chords.size()) return;
+        auto cur = chords[(size_t) idx];
+        SafePointer<ArrangeView> sp (this);
+        Chords::chooseChord (cur,
+            [sp, idx] (Chords::Chord c)
+            {
+                if (sp == nullptr) return;
+                auto all = Chords::get (sp->edit);
+                if (idx >= (int) all.size()) return;
+                c.beat = all[(size_t) idx].beat;
+                all[(size_t) idx] = c;
+                Chords::set (sp->edit, all);
+                sp->auditionChord (c);
+                sp->repaint();
+            },
+            [sp, idx] { if (sp) sp->deleteChord (idx); },
+            [sp, cur] { if (sp) sp->auditionChord (cur); });
+    }
+
+    void deleteChord (int idx)
+    {
+        auto all = Chords::get (edit);
+        if (idx < 0 || idx >= (int) all.size()) return;
+        all.erase (all.begin() + idx);
+        Chords::set (edit, all);
+        selectedChord = -1;
+        repaint();
+    }
+
+    bool chordMouseDrag (const MouseEvent& e)
+    {
+        if (chordDragIndex < 0) return false;
+        if (e.getDistanceFromDragStart() < 4) return true;
+        auto all = Chords::get (edit);
+        if (chordDragIndex >= (int) all.size()) { chordDragIndex = -1; return true; }
+        double nb = jmax (0.0, (double) std::round (beatAtX (e.x) - chordDragOffset));   // accords calés sur les temps
+        double lo = chordDragIndex > 0 ? all[(size_t) chordDragIndex - 1].beat + 0.25 : 0.0;
+        double hi = chordDragIndex + 1 < (int) all.size() ? all[(size_t) chordDragIndex + 1].beat - 0.25 : 1.0e9;
+        nb = jlimit (lo, jmax (lo, hi), nb);
+        if (std::abs (nb - all[(size_t) chordDragIndex].beat) > 1.0e-6)
+        {
+            all[(size_t) chordDragIndex].beat = nb;
+            Chords::set (edit, all);
+            repaint();
+        }
+        return true;
+    }
+
+public:
+    void chordTrackCommand (int r)
+    {
+        if (r == 1)
+        {
+            if (auto* t = chordTargetTrack())
+                if (auto* mc = Chords::toMidi (edit, *t)) { selectedClip = mc; notifySelection(); }
+        }
+        else if (r == 2)
+        {
+            if (auto* mc = dynamic_cast<te::MidiClip*> (selectedClip.get())) Chords::conformClip (edit, *mc);
+        }
+        else if (r == 3)
+        {
+            if (auto* mc = dynamic_cast<te::MidiClip*> (selectedClip.get())) Chords::detectFromClip (edit, *mc);
+        }
+        else if (r == 4) Chords::set (edit, {});
+        else if (r == 5) toggleChordTrack();
+        repaint();
+    }
+
+public:
 
     //==========================================================================
     void paint (Graphics& g) override
@@ -292,14 +518,14 @@ public:
         // ---- pistes
         {
             Graphics::ScopedSaveState s (g);
-            g.reduceClipRegion (0, rulerH, getWidth(), lanes.getHeight());
-            int y = rulerH - scrollY();
+            g.reduceClipRegion (0, topH(), getWidth(), lanes.getHeight());
+            int y = topH() - scrollY();
             int n = 1;
             for (auto* t : tracks)
             {
                 auto h = trackHeight (*t);
                 Rectangle<int> row (0, y, getWidth(), h);
-                if (row.getBottom() >= rulerH && row.getY() <= getHeight())
+                if (row.getBottom() >= topH() && row.getY() <= getHeight())
                 {
                     paintLane (g, *t, row.withTrimmedLeft (headerW).withHeight (mainH));
                     paintHeader (g, *t, n, row.withWidth (headerW).withHeight (mainH));
@@ -314,13 +540,14 @@ public:
         }
 
         paintRuler (g);
+        paintChords (g);
 
         // ---- curseur de lecture
         auto px = timeToX (edit.getTransport().getPosition().inSeconds());
         if (px >= headerW)
         {
             g.setColour (Col::accent.withAlpha (0.15f));
-            g.fillRect ((float) px - 3, (float) rulerH, 6.0f, (float) getHeight());
+            g.fillRect ((float) px - 3, (float) topH(), 6.0f, (float) getHeight());
             g.setColour (Col::accent);
             g.fillRect ((float) px - 0.5f, (float) markerH, 1.5f, (float) getHeight());
             Path tri; tri.addTriangle ((float) px - 6, rulerH - 13.0f, (float) px + 6, rulerH - 13.0f, (float) px, rulerH - 3.0f);
@@ -347,7 +574,7 @@ public:
     void resized() override
     {
         hScroll.setBounds (headerW, getHeight() - 12, getWidth() - headerW - 12, 12);
-        vScroll.setBounds (getWidth() - 12, rulerH, 12, getHeight() - rulerH - 12);
+        vScroll.setBounds (getWidth() - 12, topH(), 12, getHeight() - topH() - 12);
         updateScrollbars();
     }
 
@@ -384,6 +611,10 @@ public:
             draggingPlayhead = true;
             return;
         }
+
+        chordDragIndex = -1;
+        if (chordMouseDown (e)) return;
+        if (selectedChord >= 0) { selectedChord = -1; repaint(); }
 
         auto* t = trackAt (p.y);
         if (t == nullptr) { selectedClip = nullptr; notifySelection(); repaint(); return; }
@@ -442,6 +673,7 @@ public:
 
     void mouseDrag (const MouseEvent& e) override
     {
+        if (chordMouseDrag (e)) return;
         if (draggingPlayhead)
         {
             edit.getTransport().setPosition (te::TimePosition::fromSeconds (snap (jmax (0.0, xToTime (e.x)))));
@@ -541,10 +773,16 @@ public:
             repaint();
         }
         draggingPlayhead = false; dragMode = DragMode::none; autoDragParam = nullptr; headerVolTrack = nullptr;
+        chordDragIndex = -1;
     }
 
     void mouseDoubleClick (const MouseEvent& e) override
     {
+        if (chordsShown() && e.y >= rulerH && e.y < rulerH + chordH)
+        {
+            if (int idx = chordIndexAt (e.x); idx >= 0 && e.x >= headerW) editChord (idx);
+            return;
+        }
         auto* t = trackAt (e.y);
         if (t == nullptr) return;
         if (e.x < headerW)
@@ -623,6 +861,12 @@ public:
     {
         auto code = k.getKeyCode();
         auto cmd = k.getModifiers().isCommandDown();
+
+        if ((code == KeyPress::deleteKey || code == KeyPress::backspaceKey) && selectedChord >= 0)
+        {
+            deleteChord (selectedChord);
+            return true;
+        }
 
         if ((code == KeyPress::deleteKey || code == KeyPress::backspaceKey) && selectedClip != nullptr)
         {
@@ -877,7 +1121,7 @@ private:
     std::map<te::EditItemID, float> meterLevels;
     bool wasRecording = false;
 
-    Rectangle<int> laneArea() const { return { headerW, rulerH, getWidth() - headerW - 12, getHeight() - rulerH - 12 }; }
+    Rectangle<int> laneArea() const { return { headerW, topH(), getWidth() - headerW - 12, getHeight() - topH() - 12 }; }
     int scrollY() const             { return (int) vScroll.getCurrentRangeStart(); }
     static constexpr int mainH = 86, laneH = 46;
     int trackHeight (te::Track& t) const { return mainH + Comping::countLanes (t) * laneH; }
@@ -895,15 +1139,15 @@ private:
 
     int trackTop (te::Track& t) const
     {
-        int y = rulerH - scrollY();
+        int y = topH() - scrollY();
         for (auto* tr : te::getAudioTracks (edit)) { if (tr == &t) return y; y += trackHeight (*tr); }
         return y;
     }
 
     te::AudioTrack* trackAt (int y) const
     {
-        if (y < rulerH) return nullptr;
-        int ty = rulerH - scrollY();
+        if (y < topH()) return nullptr;
+        int ty = topH() - scrollY();
         for (auto* t : te::getAudioTracks (edit))
         {
             auto h = trackHeight (*t);

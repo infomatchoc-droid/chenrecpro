@@ -5,6 +5,18 @@ Il reprend le meilleur de Cubase, Pro Tools, Logic et Ableton Live, et il est co
 
 Usage interne au studio pour l'instant.
 
+## v0.12 — « Piste d'accords »
+
+- **Piste d'accords** (Chord Track de Cubase), sous la règle : touche **K** ou Projet › Piste d'accords.
+  - Clic sur un temps vide : on choisit l'accord dans un menu (fondamentale › couleur, de majeur à m7♭5).
+  - Clic sur un accord : on l'écoute. Glisser : on le déplace (calé sur les temps). Clic droit ou double-clic : changer, renverser (C/E, G/B…), écouter, supprimer. Suppr efface l'accord sélectionné.
+  - L'écoute passe par la piste instrument sélectionnée, sinon par la première piste instrument du projet.
+- Menu de l'en-tête « ♪ ACCORDS » :
+  - **Accords → MIDI** : un clip avec basse et accord serré sur la piste instrument.
+  - **Les notes suivent les accords** : chaque note du clip MIDI sélectionné va sur la note de l'accord la plus proche.
+  - **Détecter les accords** d'un clip MIDI (par demi-mesure, renversements compris).
+- Les accords sont enregistrés avec le projet.
+
 ## v0.11 — « Arrangement REC »
 
 - **Enregistrer le jeu de la Session dans l'arrangement**, comme le bouton Arrangement Record d'Ableton.

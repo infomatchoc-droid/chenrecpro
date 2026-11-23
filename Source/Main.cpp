@@ -24,6 +24,7 @@ using namespace juce;
 #include "Console.h"
 #include "Playlists.h"
 #include "Comping.h"
+#include "ChordTrack.h"
 #include "EditView.h"
 #include "Inspector.h"
 #include "PianoRoll.h"
@@ -184,6 +185,7 @@ public:
         }
         if (! cmd && (code == 'L' || code == 'l'))     { edit->getTransport().looping = ! edit->getTransport().looping.get(); return true; }
         if (! cmd && (code == 'C' || code == 'c'))     { edit->clickTrackEnabled = ! edit->clickTrackEnabled.get(); return true; }
+        if (! cmd && (code == 'K' || code == 'k'))     { if (arrange) arrange->toggleChordTrack(); return true; }
         if (! cmd && (code == 'F' || code == 'f'))     { arrange->zoomToFit(); return true; }
         if (! cmd && (code == 'I' || code == 'i'))     { showInspector = ! showInspector; resized(); return true; }
         if (! cmd && (code == 'A' || code == 'a'))     { arrange->toggleAutomationView(); return true; }
@@ -229,6 +231,10 @@ public:
                 m.addSeparator();
                 m.addItem (22, String::fromUTF8 ("Tempo du projet…"));
                 m.addItem (23, "Ajouter un marqueur au curseur");
+                m.addSeparator();
+                m.addItem (127, String::fromUTF8 ("Piste d'accords\tK"), true, arrange != nullptr && arrange->isChordTrackShown());
+                m.addItem (128, String::fromUTF8 ("Accords → MIDI (piste instrument)"));
+                m.addItem (129, String::fromUTF8 ("Détecter les accords du clip MIDI sélectionné"));
                 break;
             case 3:
                 m.addItem (30, String::fromUTF8 ("Réglages audio…"));
@@ -284,6 +290,9 @@ public:
             case 21: if (auto* t = arrange->getSelectedTrack()) edit->deleteTrack (t); break;
             case 22: askTempo(); break;
             case 23: addMarker(); break;
+            case 127: if (arrange) arrange->toggleChordTrack(); break;
+            case 128: if (arrange) { if (! arrange->isChordTrackShown()) arrange->toggleChordTrack(); arrange->chordTrackCommand (1); } break;
+            case 129: if (arrange) { if (! arrange->isChordTrackShown()) arrange->toggleChordTrack(); arrange->chordTrackCommand (3); } break;
             case 30: showAudioSettings(); break;
             case 31: EngineHelpers::assignInputs (*edit); break;
             case 40: EngineHelpers::togglePlay (*edit); break;
