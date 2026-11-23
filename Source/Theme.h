@@ -72,6 +72,26 @@ inline void drawPistache (Graphics& g, Rectangle<float> area, float corner = 6.0
 }
 
 /** Dessine un bouton-pastille façon console (M, S, ●, I…). */
+/** Flocon dessiné (le glyphe ❄ manque dans certaines polices Windows). */
+inline void drawSnowflake (Graphics& g, Point<float> c, float radius, Colour col)
+{
+    g.setColour (col);
+    for (int i = 0; i < 3; ++i)
+    {
+        auto a = MathConstants<float>::pi * (float) i / 3.0f + MathConstants<float>::halfPi;
+        auto d = Point<float> (std::cos (a), std::sin (a)) * radius;
+        g.drawLine ({ c - d, c + d }, 1.4f);
+        for (float sgn : { -1.0f, 1.0f })
+        {
+            auto tip = c + d * sgn;
+            auto mid = c + d * (sgn * 0.55f);
+            auto n = Point<float> (-d.y, d.x) * 0.28f;
+            g.drawLine ({ mid, tip - d * (sgn * 0.12f) + n }, 1.0f);
+            g.drawLine ({ mid, tip - d * (sgn * 0.12f) - n }, 1.0f);
+        }
+    }
+}
+
 inline void drawPill (Graphics& g, Rectangle<float> r, const String& txt, bool on, Colour onColour, Colour onText = Colours::black)
 {
     g.setColour (on ? onColour : Col::panel3.brighter (0.05f));

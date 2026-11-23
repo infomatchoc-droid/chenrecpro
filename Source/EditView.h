@@ -533,6 +533,16 @@ public:
                 if (h > 0 && row.getBottom() >= topH() && row.getY() <= getHeight())
                 {
                     paintLane (g, *t, row.withTrimmedLeft (headerW).withHeight (mainH));
+                    if (t->isFrozen (te::Track::individualFreeze))
+                    {
+                        auto lr = row.withTrimmedLeft (headerW).withHeight (mainH);
+                        g.setColour (Colour (0xff6fb7e8).withAlpha (0.13f));
+                        g.fillRect (lr);
+                        g.setColour (Colour (0xff6fb7e8).withAlpha (0.8f));
+                        g.setFont (uiFont (10.5f, true));
+                        g.drawText (String::fromUTF8 ("GELÉE"), lr.getRight() - 90, lr.getY() + 4, 80, 14, Justification::centredRight);
+                        drawSnowflake (g, { (float) lr.getRight() - 54.0f, lr.getY() + 11.0f }, 5.0f, Colour (0xff6fb7e8).withAlpha (0.8f));
+                    }
                     paintHeader (g, *t, n, row.withWidth (headerW).withHeight (mainH));
                     if (h > mainH) paintCompLanes (g, *t, row.withTrimmedTop (mainH));
                     if (auto fid = Folders::folderOf (*t); fid.isNotEmpty())
@@ -664,6 +674,18 @@ public:
         {
             automationMouseDown (*t, e);
             notifySelection();
+            repaint();
+            return;
+        }
+
+        if (t->isFrozen (te::Track::individualFreeze) && ! automationView)
+        {
+            selectedClip = nullptr;
+            notifySelection();
+            if (e.getNumberOfClicks() > 1 || e.mods.isPopupMenu())
+                AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, String::fromUTF8 ("Piste gelée"),
+                    String::fromUTF8 ("« ") + t->getName() + String::fromUTF8 (" » est gelée : ses clips et ses plugins sont figés.\n"
+                                                                              "Clique le flocon dans l'en-tête pour la dégeler et la modifier."));
             repaint();
             return;
         }
@@ -1460,6 +1482,43 @@ private:
     }
 
 public:
+    /** Gèle / dégèle une piste (rendu audio jusqu'au fader : plugins et instrument coupés). */
+    void toggleFreeze (te::AudioTrack& t)
+    {
+        const bool freeze = ! t.isFrozen (te::Track::individualFreeze);
+        if (freeze && t.getClips().isEmpty())
+        {
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, String::fromUTF8 ("Geler la piste"),
+                                              String::fromUTF8 ("« ") + t.getName() + String::fromUTF8 (" » est vide : rien à geler."));
+            return;
+        }
+        if (freeze && edit.getTransport().isRecording()) return;
+
+        MouseCursor::showWaitCursor();
+        auto res = t.setFrozen (freeze, te::Track::individualFreeze);
+        MouseCursor::hideWaitCursor();
+        if (res.failed())
+        {
+            auto msg = res.getErrorMessage();
+            String fr = String::fromUTF8 ("Impossible de geler « ") + t.getName() + String::fromUTF8 (" ».");
+            if (msg.contains ("outputs to another track"))
+                fr << String::fromUTF8 ("\nSa sortie va dans une autre piste (Bus) : gèle plutôt la piste Bus.");
+            else if (msg.contains ("Rack or aux send"))
+                fr << String::fromUTF8 ("\nUn envoi pré-fader part vers une autre piste : passe-le en post-fader.");
+            else if (msg.contains ("nothing to freeze"))
+                fr << String::fromUTF8 ("\nIl n'y a rien à rendre sur cette piste.");
+            else
+                fr << "\n" << msg;
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::NoIcon, String::fromUTF8 ("Geler la piste"), fr);
+        }
+        repaint();
+    }
+
+    void toggleFreezeSelected()
+    {
+        if (selectedTrack != nullptr) toggleFreeze (*selectedTrack);
+    }
+
     /** Range les pistes sélectionnées (ou la piste courante) dans un nouveau dossier. */
     void folderFromSelection()
     {
@@ -1509,9 +1568,17 @@ private:
         }
         g.setColour (Colour (0xffe3e5e9));
         g.setFont (uiFont (13.5f, true));
-        g.drawText (t.getName(), r.getX() + 30, r.getY() + 6, r.getWidth() - 140, 18, Justification::centredLeft, true);
+        g.drawText (t.getName(), r.getX() + 30, r.getY() + 6, r.getWidth() - 164, 18, Justification::centredLeft, true);
 
         auto bx = r.getRight() - 110;
+        const bool frozen = t.isFrozen (te::Track::individualFreeze);
+        drawPill (g, { (float) bx - 24, r.getY() + 6.0f, 20, 17 }, {}, frozen, Colour (0xff6fb7e8), Colour (0xff0d1a24));
+        drawSnowflake (g, { (float) bx - 14, r.getY() + 14.5f }, 5.5f, frozen ? Colour (0xff0d1a24) : Col::text2);
+        if (frozen)
+        {
+            g.setColour (Colour (0xff6fb7e8).withAlpha (0.10f));
+            g.fillRect (r.withTrimmedLeft (5));
+        }
         drawPill (g, { (float) bx,      r.getY() + 6.0f, 20, 17 }, "M", t.isMuted (false), Colour (0xffc98a1a));
         drawPill (g, { (float) bx + 22, r.getY() + 6.0f, 20, 17 }, "S", t.isSolo (false), Colour (0xffd6c33a));
         drawPill (g, { (float) bx + 44, r.getY() + 6.0f, 20, 17 }, String::fromUTF8 ("●"), EngineHelpers::isTrackArmed (t), Colour (0xffc43b40), Colours::white);
@@ -1572,6 +1639,7 @@ private:
         auto bx = headerW - 110;
         if (p.y >= top + 6 && p.y <= top + 23)
         {
+            if (p.x >= bx - 24 && p.x < bx - 2) { toggleFreeze (t); return; }   // ❄
             auto i = (p.x - bx) / 22;
             if (p.x >= bx && i < 4)
             {

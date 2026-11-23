@@ -5,6 +5,14 @@ Il reprend le meilleur de Cubase, Pro Tools, Logic et Ableton Live, et il est co
 
 Usage interne au studio pour l'instant.
 
+## v0.14 — « Freeze »
+
+- **Geler une piste** (Track Freeze de Cubase / Logic) : bouton **flocon** dans l'en-tête, Ctrl+Maj+F, ou Projet › Geler / dégeler.
+  - La piste (instrument + inserts jusqu'au fader) est rendue en audio. L'instrument et les plugins sont coupés, ce qui soulage le processeur.
+  - Le fader, le pan et les envois post-fader restent actifs : on continue à mixer la piste gelée.
+  - Une piste gelée est teintée de bleu (« GELÉE ») et ses clips ne se modifient plus. Re-clic sur le flocon pour la dégeler et la retoucher.
+  - Impossible si la sortie va dans une piste Bus (gèle plutôt le Bus) ou si un envoi pré-fader part vers une autre piste : un message l'explique.
+
 ## v0.13 — « Dossiers »
 
 - **Pistes dossier**, comme dans Cubase.
@@ -164,6 +172,7 @@ Usage interne au studio pour l'instant.
 | C | Métronome |
 | K | Piste d'accords |
 | Ctrl+Maj+D | Ranger les pistes sélectionnées dans un dossier |
+| Ctrl+Maj+F | Geler / dégeler la piste sélectionnée |
 | F | Zoom pour tout voir |
 | Ctrl+T | Nouvelle piste |
 | Ctrl+I | Importer un fichier audio |
