@@ -5,6 +5,14 @@ Il reprend le meilleur de Cubase, Pro Tools, Logic et Ableton Live, et il est co
 
 Usage interne au studio pour l'instant.
 
+## v0.11 — « Arrangement REC »
+
+- **Enregistrer le jeu de la Session dans l'arrangement**, comme le bouton Arrangement Record d'Ableton.
+  - Dans la vue Session (Tab), clic sur « ● Arrangement » : le transport démarre s'il était arrêté.
+  - Chaque clip ou scène que tu lances s'écrit dans la timeline de sa piste, à l'endroit exact où il a démarré et pour la durée où il a joué. Les boucles se répètent, un clip sans boucle s'arrête à sa fin.
+  - Ce qui était déjà dans l'arrangement à ces endroits est remplacé.
+  - Re-clic sur le bouton, ou arrêt du transport, pour finir. Ensuite « Retour à l'arrangement » pour réécouter et monter le résultat.
+
 ## v0.10 — « Session REC »
 
 - **Enregistrement dans les cases de la vue Session**, comme dans Ableton.

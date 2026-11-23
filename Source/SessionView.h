@@ -337,12 +337,124 @@ private:
 };
 
 //==============================================================================
+/** « Arrangement REC » (façon Ableton) : tout clip lancé depuis la Session est
+    recopié dans l'arrangement, à l'endroit et pour la durée où il a réellement joué. */
+class ArrangementRecorder : private Timer
+{
+public:
+    explicit ArrangementRecorder (te::Edit& e) : edit (e) {}
+    ~ArrangementRecorder() override { stopTimer(); }
+
+    bool isArmed() const { return armed; }
+    int getNumWritten() const { return written; }
+
+    void setArmed (bool shouldArm)
+    {
+        if (shouldArm == armed) return;
+        if (! shouldArm)
+        {
+            flush (true);
+            armed = false;
+            stopTimer();
+            return;
+        }
+        armed = true;
+        written = 0;
+        active.clear();
+        auto& tc = edit.getTransport();
+        if (! tc.isPlaying()) tc.play (false);
+        seenPlaying = false;
+        startTimerHz (30);
+    }
+
+private:
+    struct Active { te::AudioTrack::Ptr track; te::Clip::Ptr clip; };
+
+    te::Edit& edit;
+    bool armed = false, seenPlaying = false;
+    int written = 0;
+    std::map<te::EditItemID, Active> active;
+
+    static te::Clip* playingClip (te::AudioTrack& t)
+    {
+        for (auto* slot : t.getClipSlotList().getClipSlots())
+            if (auto* c = slot->getClip())
+                if (auto lh = c->getLaunchHandle())
+                    if (lh->getPlayingStatus() == te::LaunchHandle::PlayState::playing)
+                        return c;
+        return nullptr;
+    }
+
+    void timerCallback() override
+    {
+        auto& tc = edit.getTransport();
+        if (tc.isPlaying()) seenPlaying = true;
+
+        for (auto* t : te::getAudioTracks (edit))
+        {
+            auto* now = playingClip (*t);
+            auto it = active.find (t->itemID);
+            if (it != active.end() && it->second.clip.get() != now)
+            {
+                commit (it->second, false);
+                active.erase (it);
+            }
+            if (now != nullptr && active.find (t->itemID) == active.end())
+                active[t->itemID] = { t, now };
+        }
+
+        // le transport s'arrête : on écrit ce qui jouait et on désarme (comme Ableton)
+        if (seenPlaying && ! tc.isPlaying())
+        {
+            flush (false);
+            armed = false;
+            stopTimer();
+        }
+    }
+
+    void flush (bool stillPlaying)
+    {
+        for (auto& [id, a] : active) commit (a, stillPlaying);
+        active.clear();
+    }
+
+    void commit (const Active& a, bool stillPlaying)
+    {
+        if (a.track == nullptr || a.clip == nullptr) return;
+        auto lh = a.clip->getLaunchHandle();
+        if (lh == nullptr) return;
+
+        auto range = (stillPlaying || lh->getPlayingStatus() == te::LaunchHandle::PlayState::playing)
+                        ? lh->getPlayedRange() : lh->getLastPlayedRange();
+        if (! range || range->getLength() <= te::BeatDuration::fromBeats (0.01)) return;
+
+        auto& ts = edit.tempoSequence;
+        auto start = ts.toTime (range->getStart());
+        auto end = ts.toTime (range->getEnd());
+
+        // un clip qui ne boucle pas s'arrête à sa fin
+        if (! a.clip->isLooping())
+            end = jmin (end, start + a.clip->getPosition().getLength());
+        if (end <= start) return;
+
+        a.track->deleteRegion ({ start, end }, nullptr);
+        auto copy = a.clip->state.createCopy();
+        edit.createNewItemID().writeID (copy, nullptr);
+        if (auto* nc = a.track->insertClipWithState (copy))
+        {
+            nc->setPosition (te::ClipPosition { { start, end }, a.clip->getPosition().getOffset() });
+            ++written;
+        }
+    }
+};
+
+//==============================================================================
 class SessionView : public Component,
                     public FileDragAndDropTarget,
                     private Timer
 {
 public:
-    explicit SessionView (te::Edit& e) : edit (e), recorder (e)
+    explicit SessionView (te::Edit& e) : edit (e), recorder (e), arrRec (e)
     {
         Launcher::ensureGrid (edit, 8);
         recorder.onProblem = [] (const String& msg)
@@ -501,6 +613,21 @@ public:
         drawButton (backRect(), String::fromUTF8 ("↺  Retour à l'arrangement"), Col::accent);
         drawButton (quantRect(), "Lancement : " + Launcher::quantName (edit.getLaunchQuantisation().type.get()), Col::text);
 
+        // ● Arrangement : enregistre le jeu de la Session dans la timeline
+        {
+            auto r = arrRecRect();
+            bool on = arrRec.isArmed();
+            bool blink = (Time::getMillisecondCounter() / 400) % 2 == 0;
+            g.setColour (on ? Col::rec.withAlpha (blink ? 0.9f : 0.65f) : Col::panel3);
+            g.fillRoundedRectangle (r.toFloat(), 3.0f);
+            g.setColour (on ? Colours::white : Col::rec);
+            g.fillEllipse ((float) r.getX() + 12.0f, (float) r.getCentreY() - 5.0f, 10.0f, 10.0f);
+            g.setColour (on ? Colours::white : Col::text);
+            g.setFont (uiFont (11.5f, true));
+            g.drawText (on ? String::fromUTF8 ("Enregistre dans l'arrangement…") : String::fromUTF8 ("Arrangement"),
+                        r.withTrimmedLeft (30), Justification::centredLeft);
+        }
+
         if (tracks.isEmpty())
         {
             g.setColour (Col::text3);
@@ -524,6 +651,7 @@ public:
         if (backRect().contains (p))     { Launcher::backToArrangement (edit); return; }
         if (addSceneRect().contains (p)) { Launcher::ensureGrid (edit, scenes.size() + 1); repaint(); return; }
         if (quantRect().contains (p))    { showQuantMenu(); return; }
+        if (arrRecRect().contains (p))   { arrRec.setArmed (! arrRec.isArmed()); repaint(); return; }
 
         for (int si = 0; si < scenes.size(); ++si)
             if (sceneRect (si).contains (p))
@@ -630,6 +758,7 @@ public:
 private:
     te::Edit& edit;
     SlotRecorder recorder;
+    ArrangementRecorder arrRec;
 
     te::BeatDuration clipBeats (te::Clip& c) const
     {
@@ -649,6 +778,7 @@ private:
     Rectangle<int> addSceneRect() const             { return stopAllRect().translated (0, 32); }
     Rectangle<int> backRect() const                 { return { 10, 12, 230, 28 }; }
     Rectangle<int> quantRect() const                { return { 250, 12, 200, 28 }; }
+    Rectangle<int> arrRecRect() const               { return { 460, 12, 240, 28 }; }
 
     void timerCallback() override { repaint(); }
 
